@@ -27,6 +27,7 @@ import { AndroidSheetHeader } from "../../../components/AndroidScreenHeader";
 import { AppText as Text } from "../../../components/AppText";
 import { nativeHeaderScrollEdgeEffects } from "../../../native/StackHeader";
 import { tryOpenExternalUrl } from "../../../lib/openExternalUrl";
+import { useProjects } from "../../../state/entities";
 import { useEnvironmentQuery } from "../../../state/query";
 import { useThreadSelection } from "../../../state/use-thread-selection";
 import { useSelectedThreadGitActions } from "../../../state/use-selected-thread-git-actions";
@@ -64,6 +65,8 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
       ),
     [selectedThread?.pullRequests, supportsLinkedPrSnapshots],
   );
+  const projects = useProjects();
+  const attachedWorktrees = selectedThread?.worktrees ?? [];
   const gitState = useSelectedThreadGitState();
   const gitActions = useSelectedThreadGitActions();
   const theme = useUniwindTheme();
@@ -339,6 +342,50 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
               ))}
             </View>
           ))}
+        </View>
+      ) : null}
+
+      {attachedWorktrees.length > 0 ? (
+        <View className="gap-2">
+          <Text className="px-1 text-xs font-t3-bold text-foreground-muted">
+            Attached worktrees
+          </Text>
+          <View className="overflow-hidden rounded-2xl border border-border bg-card px-3 py-1">
+            {attachedWorktrees.map((link, index) => {
+              const title =
+                projects.find(
+                  (project) =>
+                    project.environmentId === selectedThread?.environmentId &&
+                    project.id === link.projectId,
+                )?.title ?? link.worktreePath;
+              const pullRequest = link.pullRequest ?? null;
+              return (
+                <View key={link.worktreePath}>
+                  {index > 0 ? <View className="ml-12 h-px bg-border" /> : null}
+                  <SheetListRow
+                    icon={
+                      pullRequest
+                        ? "arrow.triangle.pull"
+                        : "point.topleft.down.curvedto.point.bottomright.up"
+                    }
+                    title={link.branch ? `${title} · ${link.branch}` : title}
+                    subtitle={
+                      pullRequest
+                        ? `#${pullRequest.number} ${pullRequest.state} · ${link.worktreePath}`
+                        : link.worktreePath
+                    }
+                    onPress={() => {
+                      if (!pullRequest) return;
+                      void tryOpenExternalUrl(pullRequest.url, "pull-request").then((opened) => {
+                        if (!opened)
+                          Alert.alert("Unable to open PR", "The pull request could not be opened.");
+                      });
+                    }}
+                  />
+                </View>
+              );
+            })}
+          </View>
         </View>
       ) : null}
 

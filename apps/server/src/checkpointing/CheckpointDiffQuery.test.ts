@@ -1,4 +1,10 @@
-import { CheckpointRef, ProjectId, ThreadId, TurnId } from "@t3tools/contracts";
+import {
+  CheckpointRef,
+  ProjectId,
+  ThreadId,
+  TurnId,
+  type OrchestrationThreadShell,
+} from "@t3tools/contracts";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -6,7 +12,7 @@ import * as Option from "effect/Option";
 import { describe, expect } from "vite-plus/test";
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { checkpointRefForThreadTurn } from "./Utils.ts";
+import { checkpointRefForThreadTurn, checkpointRefForThreadWorktreeTurn } from "./Utils.ts";
 import * as CheckpointDiffQuery from "./CheckpointDiffQuery.ts";
 import * as CheckpointStore from "./CheckpointStore.ts";
 import { CheckpointThreadNotFoundError } from "./Errors.ts";
@@ -461,6 +467,103 @@ describe("CheckpointDiffQuery.layer", () => {
       expect(error.message).toBe(
         "Checkpoint invariant violation in CheckpointDiffQuery.getTurnDiff: Thread 'thread-missing' not found.",
       );
+    }),
+  );
+
+  it.effect("diffs an attached worktree from its own refs and rejects other paths", () =>
+    Effect.gen(function* () {
+      const projectId = ProjectId.make("project-attached");
+      const threadId = ThreadId.make("thread-attached");
+      const worktreePath = "/tmp/library-worktree";
+      const diffCalls: Array<{
+        readonly cwd: string;
+        readonly fromCheckpointRef: CheckpointRef;
+        readonly toCheckpointRef: CheckpointRef;
+      }> = [];
+      const checkpointStore: CheckpointStore.CheckpointStore["Service"] = {
+        isGitRepository: () => Effect.succeed(true),
+        captureCheckpoint: () => Effect.void,
+        hasCheckpointRef: () => Effect.succeed(true),
+        restoreCheckpoint: () => Effect.succeed(true),
+        diffCheckpoints: ({ cwd, fromCheckpointRef, toCheckpointRef }) =>
+          Effect.sync(() => {
+            diffCalls.push({ cwd, fromCheckpointRef, toCheckpointRef });
+            return "attached diff patch";
+          }),
+        deleteCheckpointRefs: () => Effect.void,
+      };
+      // Only the attached worktree list matters to the diff query.
+      const threadShell = {
+        worktrees: [
+          {
+            worktreePath,
+            projectId: ProjectId.make("project-library"),
+            branch: "feature",
+            source: "agent",
+            linkedAt: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+      } as unknown as OrchestrationThreadShell;
+
+      const layer = CheckpointDiffQuery.layer.pipe(
+        Layer.provideMerge(Layer.succeed(CheckpointStore.CheckpointStore, checkpointStore)),
+        Layer.provideMerge(
+          Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
+            getThreadCheckpointContext: () =>
+              Effect.succeed(
+                Option.some({
+                  ...makeThreadCheckpointContext({
+                    projectId,
+                    threadId,
+                    workspaceRoot: "/tmp/workspace",
+                    worktreePath: null,
+                    checkpointTurnCount: 2,
+                    checkpointRef: checkpointRefForThreadTurn(threadId, 2),
+                  }),
+                  checkpoints: [1, 2].map((turnCount) => ({
+                    turnId: TurnId.make(`turn-${turnCount}`),
+                    checkpointTurnCount: turnCount,
+                    checkpointRef: checkpointRefForThreadTurn(threadId, turnCount),
+                    status: "ready" as const,
+                    files: [],
+                    assistantMessageId: null,
+                    completedAt: "2026-01-01T00:00:00.000Z",
+                  })),
+                }),
+              ),
+            getThreadShellById: () => Effect.succeed(Option.some(threadShell)),
+          }),
+        ),
+      );
+
+      const { attached, rejected } = yield* Effect.gen(function* () {
+        const query = yield* CheckpointDiffQuery.CheckpointDiffQuery;
+        const attached = yield* query.getTurnDiff({
+          threadId,
+          fromTurnCount: 1,
+          toTurnCount: 2,
+          worktreePath: `${worktreePath}/`,
+        });
+        const rejected = yield* query
+          .getTurnDiff({
+            threadId,
+            fromTurnCount: 1,
+            toTurnCount: 2,
+            worktreePath: "/tmp/somewhere-else",
+          })
+          .pipe(Effect.flip);
+        return { attached, rejected };
+      }).pipe(Effect.provide(layer));
+
+      expect(attached.diff).toBe("attached diff patch");
+      expect(diffCalls).toEqual([
+        {
+          cwd: worktreePath,
+          fromCheckpointRef: checkpointRefForThreadWorktreeTurn(threadId, worktreePath, 1),
+          toCheckpointRef: checkpointRefForThreadWorktreeTurn(threadId, worktreePath, 2),
+        },
+      ]);
+      expect(rejected._tag).toBe("CheckpointWorkspacePathMissingError");
     }),
   );
 });

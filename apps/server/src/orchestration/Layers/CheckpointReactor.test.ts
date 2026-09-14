@@ -60,7 +60,10 @@ import {
   ProviderService,
   type ProviderServiceShape,
 } from "../../provider/Services/ProviderService.ts";
-import { checkpointRefForThreadTurn } from "../../checkpointing/Utils.ts";
+import {
+  checkpointRefForThreadTurn,
+  checkpointRefForThreadWorktreeTurn,
+} from "../../checkpointing/Utils.ts";
 import { ProviderValidationError } from "../../provider/Errors.ts";
 import { ServerConfig } from "../../config.ts";
 import * as WorkspaceEntries from "../../workspace/WorkspaceEntries.ts";
@@ -1877,6 +1880,107 @@ describe("CheckpointReactor", () => {
       threadId: ThreadId.make("thread-1"),
       numTurns: 1,
     });
+  });
+
+  it("reverts an attached worktree to its baseline from when the thread attached it", async () => {
+    const harness = await createHarness({ providerName: ProviderDriverKind.make("claudeAgent") });
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const threadId = ThreadId.make("thread-1");
+    const libraryCwd = createGitRepository();
+    tempDirs.push(libraryCwd);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-attached"),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: "claudeAgent",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.diff.complete",
+        commandId: CommandId.make("cmd-diff-attached-1"),
+        threadId,
+        turnId: asTurnId("turn-attached-1"),
+        completedAt: createdAt,
+        checkpointRef: checkpointRefForThreadTurn(threadId, 1),
+        status: "ready",
+        files: [],
+        checkpointTurnCount: 1,
+        createdAt,
+      }),
+    );
+
+    // Attached after turn 1: the reactor captures the library's baseline at turn 1.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-project-create-library"),
+        projectId: asProjectId("project-library"),
+        title: "Library",
+        workspaceRoot: libraryCwd,
+        defaultModelSelection: null,
+        createdAt,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.worktree.attach",
+        commandId: CommandId.make("cmd-attach-library"),
+        threadId,
+        worktreePath: libraryCwd,
+        projectId: asProjectId("project-library"),
+        branch: "main",
+        source: "agent",
+      }),
+    );
+    await waitForGitRefExists(
+      libraryCwd,
+      checkpointRefForThreadWorktreeTurn(threadId, libraryCwd, 1),
+    );
+
+    NodeFS.writeFileSync(NodePath.join(libraryCwd, "README.md"), "library v2\n", "utf8");
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.diff.complete",
+        commandId: CommandId.make("cmd-diff-attached-2"),
+        threadId,
+        turnId: asTurnId("turn-attached-2"),
+        completedAt: createdAt,
+        checkpointRef: checkpointRefForThreadTurn(threadId, 2),
+        status: "ready",
+        files: [],
+        checkpointTurnCount: 2,
+        createdAt,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.checkpoint.revert",
+        commandId: CommandId.make("cmd-revert-attached"),
+        threadId,
+        turnCount: 0,
+        createdAt,
+      }),
+    );
+
+    await waitForEvent(harness.engine, (event) => event.type === "thread.reverted");
+    expect(NodeFS.readFileSync(NodePath.join(harness.cwd, "README.md"), "utf8")).toBe("v1\n");
+    expect(NodeFS.readFileSync(NodePath.join(libraryCwd, "README.md"), "utf8")).toBe("v1\n");
+    expect(
+      gitRefExists(libraryCwd, checkpointRefForThreadWorktreeTurn(threadId, libraryCwd, 1)),
+    ).toBe(false);
   });
 
   it("processes consecutive revert requests with deterministic rollback sequencing", async () => {

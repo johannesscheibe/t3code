@@ -32,6 +32,7 @@ import {
   ThreadId,
   ThreadPullRequestSnapshot,
   ThreadPullRequestStack,
+  ThreadWorktreePullRequest,
   type ThreadPullRequestLink,
   type ThreadWorktreeLink,
 } from "@t3tools/contracts";
@@ -121,6 +122,12 @@ const ProjectionTurnStartMessageDbRowSchema = ProjectionThreadMessageDbRowSchema
   Struct.assign({ hasOtherUserMessages: Schema.Number }),
 );
 const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
+const ProjectionThreadWorktreeDbRowSchema = ProjectionThreadWorktree.mapFields(
+  Struct.assign({
+    pullRequest: Schema.NullOr(Schema.fromJsonString(ThreadWorktreePullRequest)),
+  }),
+);
+
 const ProjectionThreadPullRequestDbRowSchema = ProjectionThreadPullRequest.mapFields(
   Struct.assign({
     snapshot: Schema.NullOr(Schema.fromJsonString(ThreadPullRequestSnapshot)),
@@ -453,6 +460,7 @@ function mapWorktreeRow(row: ProjectionThreadWorktree): ThreadWorktreeLink {
     branch: row.branch,
     source: row.source,
     linkedAt: row.linkedAt,
+    ...(row.pullRequest === null ? {} : { pullRequest: row.pullRequest }),
   };
 }
 
@@ -1378,7 +1386,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 
   const listThreadWorktreeRows = SqlSchema.findAll({
     Request: Schema.Void,
-    Result: ProjectionThreadWorktree,
+    Result: ProjectionThreadWorktreeDbRowSchema,
     execute: () =>
       sql`
         SELECT
@@ -1387,7 +1395,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           project_id AS "projectId",
           branch,
           source,
-          linked_at AS "linkedAt"
+          linked_at AS "linkedAt",
+          pull_request_json AS "pullRequest"
         FROM projection_thread_worktrees
         ORDER BY thread_id ASC, linked_at ASC, worktree_path ASC
       `,
@@ -1395,7 +1404,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 
   const listThreadWorktreeRowsByThread = SqlSchema.findAll({
     Request: ThreadIdLookupInput,
-    Result: ProjectionThreadWorktree,
+    Result: ProjectionThreadWorktreeDbRowSchema,
     execute: ({ threadId }) =>
       sql`
         SELECT
@@ -1404,7 +1413,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           project_id AS "projectId",
           branch,
           source,
-          linked_at AS "linkedAt"
+          linked_at AS "linkedAt",
+          pull_request_json AS "pullRequest"
         FROM projection_thread_worktrees
         WHERE thread_id = ${threadId}
         ORDER BY linked_at ASC, worktree_path ASC

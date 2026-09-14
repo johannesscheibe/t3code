@@ -20,6 +20,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { threadWorktreeKeysEqual, threadWorktrees } from "@t3tools/shared/threadWorktrees";
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
@@ -30,7 +31,7 @@ import {
   CheckpointWorkspacePathMissingError,
 } from "./Errors.ts";
 import type { CheckpointServiceError } from "./Errors.ts";
-import { checkpointRefForThreadTurn } from "./Utils.ts";
+import { checkpointRefForThreadTurn, checkpointRefForThreadWorktreeTurn } from "./Utils.ts";
 import * as CheckpointStore from "./CheckpointStore.ts";
 
 /** Service tag for checkpoint diff queries. */
@@ -79,6 +80,27 @@ function buildTurnDiffResult(
 export const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const checkpointStore = yield* CheckpointStore.CheckpointStore;
+
+  // A diff of an attached worktree reads that worktree's own refs. Only a
+  // worktree attached to the thread can be read this way.
+  const requireAttachedWorktree = Effect.fn("CheckpointDiffQuery.requireAttachedWorktree")(
+    function* (
+      operation: "CheckpointDiffQuery.getTurnDiff" | "CheckpointDiffQuery.getFullThreadDiff",
+      threadId: ThreadId,
+      worktreePath: string,
+    ) {
+      const thread = yield* projectionSnapshotQuery.getThreadShellById(threadId);
+      const link = Option.isSome(thread)
+        ? threadWorktrees(thread.value).find((entry) =>
+            threadWorktreeKeysEqual(entry, { worktreePath }),
+          )
+        : undefined;
+      if (link === undefined) {
+        return yield* new CheckpointWorkspacePathMissingError({ operation, threadId });
+      }
+      return link.worktreePath;
+    },
+  );
 
   const getTurnDiff: CheckpointDiffQuery["Service"]["getTurnDiff"] = Effect.fn("getTurnDiff")(
     function* (input) {
@@ -165,14 +187,36 @@ export const make = Effect.gen(function* () {
         });
       }
 
+      const attachedPath =
+        input.worktreePath === undefined
+          ? null
+          : yield* requireAttachedWorktree(operation, input.threadId, input.worktreePath);
       const diff = yield* checkpointStore
-        .diffCheckpoints({
-          cwd: workspaceCwd,
-          fromCheckpointRef,
-          toCheckpointRef,
-          fallbackFromToHead: false,
-          ignoreWhitespace,
-        })
+        .diffCheckpoints(
+          attachedPath === null
+            ? {
+                cwd: workspaceCwd,
+                fromCheckpointRef,
+                toCheckpointRef,
+                fallbackFromToHead: false,
+                ignoreWhitespace,
+              }
+            : {
+                cwd: attachedPath,
+                fromCheckpointRef: checkpointRefForThreadWorktreeTurn(
+                  input.threadId,
+                  attachedPath,
+                  input.fromTurnCount,
+                ),
+                toCheckpointRef: checkpointRefForThreadWorktreeTurn(
+                  input.threadId,
+                  attachedPath,
+                  input.toTurnCount,
+                ),
+                fallbackFromToHead: false,
+                ignoreWhitespace,
+              },
+        )
         .pipe(Effect.withSpan("checkpoint.turnDiff.diffCheckpoints"));
 
       const turnDiff = buildTurnDiffResult(input, diff);
@@ -255,14 +299,63 @@ export const make = Effect.gen(function* () {
       });
     }
 
+    const attachedPath =
+      input.worktreePath === undefined
+        ? null
+        : yield* requireAttachedWorktree(operation, input.threadId, input.worktreePath);
+    let attachedFromTurnCount: number | null = null;
+    if (attachedPath !== null) {
+      // A worktree attached partway through the thread starts at its first ref.
+      for (let candidate = 0; candidate <= input.toTurnCount; candidate += 1) {
+        const exists = yield* checkpointStore.hasCheckpointRef({
+          cwd: attachedPath,
+          checkpointRef: checkpointRefForThreadWorktreeTurn(
+            input.threadId,
+            attachedPath,
+            candidate,
+          ),
+        });
+        if (exists) {
+          attachedFromTurnCount = candidate;
+          break;
+        }
+      }
+      if (attachedFromTurnCount === null) {
+        return yield* new CheckpointRefUnavailableError({
+          operation,
+          threadId: input.threadId,
+          turnCount: 0,
+          checkpoint: "from",
+        });
+      }
+    }
+
     const diff = yield* checkpointStore
-      .diffCheckpoints({
-        cwd: workspaceCwd,
-        fromCheckpointRef: checkpointRefForThreadTurn(input.threadId, 0),
-        toCheckpointRef: threadContext.value.toCheckpointRef as CheckpointRef,
-        fallbackFromToHead: false,
-        ignoreWhitespace,
-      })
+      .diffCheckpoints(
+        attachedPath === null || attachedFromTurnCount === null
+          ? {
+              cwd: workspaceCwd,
+              fromCheckpointRef: checkpointRefForThreadTurn(input.threadId, 0),
+              toCheckpointRef: threadContext.value.toCheckpointRef as CheckpointRef,
+              fallbackFromToHead: false,
+              ignoreWhitespace,
+            }
+          : {
+              cwd: attachedPath,
+              fromCheckpointRef: checkpointRefForThreadWorktreeTurn(
+                input.threadId,
+                attachedPath,
+                attachedFromTurnCount,
+              ),
+              toCheckpointRef: checkpointRefForThreadWorktreeTurn(
+                input.threadId,
+                attachedPath,
+                input.toTurnCount,
+              ),
+              fallbackFromToHead: false,
+              ignoreWhitespace,
+            },
+      )
       .pipe(Effect.withSpan("checkpoint.fullThread.diffCheckpoints"));
 
     const turnDiff = buildTurnDiffResult(

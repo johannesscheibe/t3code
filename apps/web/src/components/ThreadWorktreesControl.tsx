@@ -6,13 +6,20 @@ import type {
   ThreadWorktreeLink,
 } from "@t3tools/contracts";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/models";
-import { CopyIcon, FolderGit2Icon, FolderPlusIcon, UnlinkIcon } from "lucide-react";
+import {
+  CopyIcon,
+  FolderGit2Icon,
+  FolderPlusIcon,
+  GitPullRequestIcon,
+  UnlinkIcon,
+} from "lucide-react";
 import { memo, useMemo, useState } from "react";
 
 import { useProjects, useServerConfigs } from "~/state/entities";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { vcsEnvironment } from "~/state/vcs";
+import { readLocalApi } from "~/localApi";
 import { formatWorktreePathForDisplay } from "~/worktreeCleanup";
 import { composerFloatingLayerProps } from "./chat/composerEventScope";
 import { Button } from "./ui/button";
@@ -84,10 +91,24 @@ export const ThreadWorktreesControl = memo(function ThreadWorktreesControl({
             >
               <FolderGit2Icon className="size-3 shrink-0" />
               <span className="min-w-0 max-w-[180px] truncate">
-                {link.branch ? `${title} · ${link.branch}` : title}
+                {[title, link.branch, link.pullRequest ? `#${link.pullRequest.number}` : null]
+                  .filter(Boolean)
+                  .join(" · ")}
               </span>
             </MenuTrigger>
             <MenuPopup align="start" side="top" {...composerFloatingLayerProps}>
+              {link.pullRequest ? (
+                <MenuItem
+                  onClick={() => {
+                    if (link.pullRequest) {
+                      void readLocalApi()?.shell.openExternal(link.pullRequest.url);
+                    }
+                  }}
+                >
+                  <GitPullRequestIcon className="size-3.5" />
+                  Open pull request #{link.pullRequest.number}
+                </MenuItem>
+              ) : null}
               <MenuItem onClick={() => void navigator.clipboard.writeText(link.worktreePath)}>
                 <CopyIcon className="size-3.5" />
                 Copy path

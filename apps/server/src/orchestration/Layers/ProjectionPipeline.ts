@@ -917,6 +917,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionThreadWorktreeRepository.upsert({
             threadId: event.payload.threadId,
             ...event.payload.link,
+            pullRequest: event.payload.link.pullRequest ?? null,
           });
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,

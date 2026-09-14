@@ -46,7 +46,7 @@ import { PREFERRED_HIGHLIGHTER } from "../lib/syntaxHighlighting";
 import { areAllDiffFilesCollapsed, toggleAllDiffFiles } from "../lib/diffCollapse";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { useWorkspaceMutationRefresh } from "../hooks/useWorkspaceMutationRefresh";
-import { useProject, useThread } from "../state/entities";
+import { useProject, useProjects, useThread } from "../state/entities";
 import { resolveThreadRouteRef } from "../threadRoutes";
 import { useClientSettings, useUpdateClientSettings } from "../hooks/useSettings";
 import { formatShortTimestamp } from "../timestampFormat";
@@ -145,10 +145,25 @@ export default function DiffPanel({
         }
       : null,
   );
-  const activeCwd = activeThread?.worktreePath ?? activeProject?.workspaceRoot;
-  const activeRepositoryRoot = activeThread?.worktreePath
-    ? undefined
-    : activeProject?.repositoryIdentity?.rootPath;
+  const projects = useProjects();
+  // The panel reviews one checkout at a time. A detached worktree falls back to the primary.
+  const [selectedWorktreePath, setSelectedWorktreePath] = useState<string | null>(null);
+  const selectedWorktree =
+    activeThread?.worktrees?.find((link) => link.worktreePath === selectedWorktreePath) ?? null;
+  const worktreeProjectTitle = (projectId: string) =>
+    projects.find(
+      (project) =>
+        project.environmentId === activeThread?.environmentId && project.id === projectId,
+    )?.title ?? projectId;
+  const selectedCheckoutTitle = selectedWorktree
+    ? worktreeProjectTitle(selectedWorktree.projectId)
+    : (activeProject?.title ?? "Primary workspace");
+  const activeCwd =
+    selectedWorktree?.worktreePath ?? activeThread?.worktreePath ?? activeProject?.workspaceRoot;
+  const activeRepositoryRoot =
+    selectedWorktree !== null || activeThread?.worktreePath
+      ? undefined
+      : activeProject?.repositoryIdentity?.rootPath;
   const serverConfig = useAtomValue(
     serverEnvironment.configValueAtom(activeThread?.environmentId ?? null),
   );
@@ -223,7 +238,7 @@ export default function DiffPanel({
         : `Turn ${selectedCheckpointTurnCount ?? "?"}`;
   const reviewSectionId = selectedTurn ? `turn:${selectedTurn.turnId}` : selectedGitScope;
   const collapseScopeKey = routeThreadRef
-    ? `${routeThreadRef.environmentId}:${routeThreadRef.threadId}:${reviewSectionId}`
+    ? `${routeThreadRef.environmentId}:${routeThreadRef.threadId}:${selectedWorktree?.worktreePath ?? ""}:${reviewSectionId}`
     : null;
   const codeViewMountKey = `${collapseScopeKey ?? reviewSectionId}:${codeViewRevision}`;
   const reviewSectionTitle = selectedTurn
@@ -248,7 +263,10 @@ export default function DiffPanel({
       fromTurnCount: selectedCheckpointRange?.fromTurnCount ?? null,
       toTurnCount: selectedCheckpointRange?.toTurnCount ?? null,
       ignoreWhitespace: diffIgnoreWhitespace,
-      cacheScope: selectedTurn ? `turn:${selectedTurn.turnId}` : null,
+      worktreePath: selectedWorktree?.worktreePath ?? null,
+      cacheScope: selectedTurn
+        ? `turn:${selectedTurn.turnId}:${selectedWorktree?.worktreePath ?? ""}`
+        : null,
     },
     { enabled: isGitRepo && selectedTurn !== undefined },
   );
@@ -555,6 +573,43 @@ export default function DiffPanel({
   const headerRow = (
     <>
       <div className="flex min-w-0 flex-1 items-center gap-3 [-webkit-app-region:no-drag]">
+        {activeThread?.worktrees && activeThread.worktrees.length > 0 ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              className="inline-flex h-6 max-w-48 items-center gap-1 rounded-md px-2 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label={`Checkout: ${selectedCheckoutTitle}`}
+            >
+              <span className="truncate">{selectedCheckoutTitle}</span>
+              <ChevronDownIcon className="size-3.5 shrink-0 opacity-70" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-64">
+              <DropdownMenuItem
+                className={selectedWorktree === null ? "bg-foreground/[0.08]" : undefined}
+                onClick={() => setSelectedWorktreePath(null)}
+              >
+                <span className="truncate">{activeProject?.title ?? "Primary workspace"}</span>
+              </DropdownMenuItem>
+              {activeThread.worktrees.map((link) => (
+                <DropdownMenuItem
+                  key={link.worktreePath}
+                  className={
+                    link.worktreePath === selectedWorktree?.worktreePath
+                      ? "bg-foreground/[0.08]"
+                      : undefined
+                  }
+                  onClick={() => setSelectedWorktreePath(link.worktreePath)}
+                >
+                  <span className="truncate">{worktreeProjectTitle(link.projectId)}</span>
+                  {link.branch ? (
+                    <span className="ml-auto truncate text-xs text-muted-foreground">
+                      {link.branch}
+                    </span>
+                  ) : null}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
         <DropdownMenu>
           <DropdownMenuTrigger
             className="inline-flex h-6 max-w-full items-center gap-1 rounded-md bg-accent px-2 text-xs font-medium text-accent-foreground outline-none transition-colors hover:bg-accent/80 focus-visible:ring-2 focus-visible:ring-ring"

@@ -303,12 +303,13 @@ export function applyThreadDetailEvent(
         kind: "updated",
         thread: {
           ...thread,
-          worktrees: [
-            ...threadWorktrees(thread).filter(
-              (existing) => !threadWorktreeKeysEqual(existing, link),
-            ),
-            link,
-          ],
+          worktrees: threadWorktrees(thread).some((existing) =>
+            threadWorktreeKeysEqual(existing, link),
+          )
+            ? threadWorktrees(thread).map((existing) =>
+                threadWorktreeKeysEqual(existing, link) ? link : existing,
+              )
+            : [...threadWorktrees(thread), link],
           updatedAt: event.payload.updatedAt,
         },
       };

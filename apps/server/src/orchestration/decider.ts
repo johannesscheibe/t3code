@@ -1206,6 +1206,48 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       ];
     }
 
+    case "thread.worktree.sync": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const existing = findWorktreeLink(thread, command.worktreePath);
+      if (existing === undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `worktree ${command.worktreePath} is not attached to thread ${command.threadId}`,
+        });
+      }
+      const previous = existing.pullRequest ?? null;
+      if (
+        existing.branch === command.branch &&
+        previous?.number === command.pullRequest?.number &&
+        previous?.url === command.pullRequest?.url &&
+        previous?.state === command.pullRequest?.state
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `worktree ${command.worktreePath} of thread ${command.threadId} is unchanged`,
+        });
+      }
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.worktree-attached",
+        payload: {
+          threadId: command.threadId,
+          link: { ...existing, branch: command.branch, pullRequest: command.pullRequest },
+          updatedAt: occurredAt,
+        },
+      };
+    }
+
     case "thread.worktree.detach": {
       const thread = yield* requireThread({
         readModel,

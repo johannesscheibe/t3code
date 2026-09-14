@@ -161,6 +161,39 @@ it.layer(NodeServices.layer)("thread worktree decider", (it) => {
     }),
   );
 
+  it.effect("records a worktree's drifted branch and detected pull request once", () =>
+    Effect.gen(function* () {
+      const model = makeReadModel([libLink]);
+      const sync = yield* decodeCommand({
+        type: "thread.worktree.sync",
+        commandId: "sync",
+        threadId: THREAD_ID,
+        worktreePath: "/lib-wt",
+        branch: "feat/y",
+        pullRequest: { number: 7, url: "https://github.com/acme/lib/pull/7", state: "open" },
+      });
+      const synced = singleEvent(
+        yield* decideOrchestrationCommand({ readModel: model, command: sync }),
+      );
+      expect(synced).toMatchObject({
+        type: "thread.worktree-attached",
+        payload: {
+          link: {
+            worktreePath: "/lib-wt",
+            branch: "feat/y",
+            source: "manual",
+            pullRequest: { number: 7, state: "open" },
+          },
+        },
+      });
+      const next = yield* projectEvent(model, { ...synced, sequence: 1 } as OrchestrationEvent);
+      const repeated = yield* Effect.flip(
+        decideOrchestrationCommand({ readModel: next, command: sync }),
+      );
+      expect(repeated._tag).toBe("OrchestrationCommandInvariantError");
+    }),
+  );
+
   it.effect("rejects detaching a worktree that is not attached", () =>
     Effect.gen(function* () {
       const detach = yield* decodeCommand({

@@ -9,6 +9,21 @@ export function checkpointRefForThreadTurn(threadId: ThreadId, turnCount: number
   );
 }
 
+/**
+ * Checkpoint ref for an attached worktree. The path is part of the name so a
+ * worktree that shares a repository with the thread's primary workspace, or
+ * with another attached worktree, never overwrites their refs.
+ */
+export function checkpointRefForThreadWorktreeTurn(
+  threadId: ThreadId,
+  worktreePath: string,
+  turnCount: number,
+): CheckpointRef {
+  return CheckpointRef.make(
+    `${CHECKPOINT_REFS_PREFIX}/${Encoding.encodeBase64Url(threadId)}/worktree/${Encoding.encodeBase64Url(worktreePath)}/turn/${turnCount}`,
+  );
+}
+
 export function resolveThreadWorkspaceCwd(input: {
   readonly thread: {
     readonly projectId: ProjectId;

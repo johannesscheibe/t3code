@@ -81,6 +81,12 @@ capture workspace state without adding commits to the user's branch. A revert mu
 workspace state with the provider conversation. A provider that cannot roll back its conversation
 must reject that operation before changing the filesystem.
 
+Attached worktrees of other projects keep their own refs, named by thread, worktree path, and turn
+in [checkpoint utilities](../../apps/server/src/checkpointing/Utils.ts), so two checkouts of one
+repository never overwrite each other's refs. The turn summary and its file list still describe only the
+primary workspace. A worktree gets a baseline when it is attached, and revert restores it to the
+target turn or, if it was attached later, to that attach baseline.
+
 ## Waiting for asynchronous work
 
 Tests use [drainable workers](../../packages/shared/src/DrainableWorker.ts) to wait until both the

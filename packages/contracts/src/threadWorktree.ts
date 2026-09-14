@@ -1,6 +1,13 @@
 import * as Schema from "effect/Schema";
 
-import { IsoDateTime, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  IsoDateTime,
+  PositiveInt,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
+import { PullRequestState } from "./pullRequest.ts";
 
 /**
  * Who attached a worktree to a thread: the user from the branch toolbar, or the
@@ -20,12 +27,23 @@ export type ThreadWorktreeKey = typeof ThreadWorktreeKey.Type;
  * the registered project whose repository the worktree belongs to; it supplies
  * scripts, the pull request host, and the one-worktree-per-project invariant.
  */
+/** The pull request of an attached worktree's branch, as last detected on its host. */
+export const ThreadWorktreePullRequest = Schema.Struct({
+  number: PositiveInt,
+  url: TrimmedNonEmptyString,
+  state: PullRequestState,
+});
+export type ThreadWorktreePullRequest = typeof ThreadWorktreePullRequest.Type;
+
 export const ThreadWorktreeLink = Schema.Struct({
   ...ThreadWorktreeKey.fields,
   projectId: ProjectId,
   branch: Schema.NullOr(TrimmedNonEmptyString),
   source: ThreadWorktreeLinkSource,
   linkedAt: IsoDateTime,
+  // Maintained by the server like a thread's branch pull request. Optional so
+  // links recorded before detection still decode.
+  pullRequest: Schema.optional(Schema.NullOr(ThreadWorktreePullRequest)),
 });
 export type ThreadWorktreeLink = typeof ThreadWorktreeLink.Type;
 

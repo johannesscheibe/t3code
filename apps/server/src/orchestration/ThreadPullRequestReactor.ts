@@ -8,8 +8,10 @@ import {
   type OrchestrationProjectShell,
   type ThreadId,
   type ThreadLinkedPullRequest,
+  type OrchestrationThreadShell,
 } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { threadWorktrees } from "@t3tools/shared/threadWorktrees";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -93,6 +95,95 @@ export const make = Effect.gen(function* () {
       else pendingBackfill.set(thread.id, remaining - 1);
     }
   };
+
+  // Attached worktrees get the same branch discovery against their own
+  // project. The result lives on the link, beside the thread's own branch PR.
+  const synchronizeAttachedWorktrees = Effect.fn(
+    "ThreadPullRequestReactor.synchronizeAttachedWorktrees",
+  )(function* (
+    request: RefreshRequest,
+    threads: ReadonlyArray<OrchestrationThreadShell>,
+    projects: ReadonlyMap<string, OrchestrationProjectShell>,
+  ) {
+    const entries = threads.flatMap((thread) =>
+      thread.archivedAt === null &&
+      (request.threadId === null || thread.id === request.threadId) &&
+      ((thread.settledOverride !== "settled" && thread.settledAt === null) ||
+        request.threadId !== null)
+        ? threadWorktrees(thread)
+            .filter((link) => link.branch !== null)
+            .map((link) => ({ thread, link }))
+        : [],
+    );
+    const groups = Map.groupBy(entries, ({ link }) =>
+      JSON.stringify([link.projectId, link.worktreePath, link.branch]),
+    );
+    yield* Effect.forEach(
+      groups.values(),
+      (group) =>
+        Effect.gen(function* () {
+          const first = group[0]!.link;
+          const project = projects.get(first.projectId);
+          if (
+            project === undefined ||
+            first.branch === null ||
+            !(yield* fileSystem.exists(first.worktreePath))
+          ) {
+            return;
+          }
+          const detected = yield* git.branchPullRequest(
+            { cwd: first.worktreePath, branch: first.branch },
+            { refresh: request.refresh },
+          );
+          const found =
+            detected !== null && pullRequestMatchesProject(detected, project)
+              ? { number: detected.number, url: detected.url, state: detected.state }
+              : null;
+          yield* Effect.forEach(
+            group,
+            ({ thread, link }) =>
+              Effect.gen(function* () {
+                const previous = link.pullRequest ?? null;
+                // A merged or closed pull request stays once its branch is gone.
+                const pullRequest =
+                  found ?? (previous !== null && previous.state !== "open" ? previous : null);
+                if (
+                  previous?.number === pullRequest?.number &&
+                  previous?.url === pullRequest?.url &&
+                  previous?.state === pullRequest?.state
+                ) {
+                  return;
+                }
+                const uuid = yield* crypto.randomUUIDv4;
+                yield* engine.dispatch({
+                  type: "thread.worktree.sync",
+                  commandId: CommandId.make(
+                    `server:thread-worktree-pull-request:${thread.id}:${uuid}`,
+                  ),
+                  threadId: thread.id,
+                  worktreePath: link.worktreePath,
+                  branch: link.branch,
+                  pullRequest,
+                });
+              }).pipe(
+                // The link changed since the lookup. Its own events requeue it.
+                Effect.catchTags({ OrchestrationCommandInvariantError: () => Effect.void }),
+              ),
+            { discard: true },
+          );
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.failCause(cause)
+              : Effect.logWarning("attached worktree pull request lookup failed", {
+                  worktreePath: group[0]!.link.worktreePath,
+                  cause: Cause.pretty(cause),
+                }),
+          ),
+        ),
+      { concurrency: 8, discard: true },
+    );
+  });
 
   const synchronize = Effect.fn("ThreadPullRequestReactor.synchronize")(function* (
     request: RefreshRequest,
@@ -296,6 +387,7 @@ export const make = Effect.gen(function* () {
         ),
       { concurrency: 8, discard: true },
     );
+    yield* synchronizeAttachedWorktrees(request, snapshot.threads, projects);
   });
 
   const worker = yield* makeDrainableWorker((request: RefreshRequest) =>

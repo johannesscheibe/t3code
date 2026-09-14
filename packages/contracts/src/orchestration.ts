@@ -35,6 +35,7 @@ import {
   ThreadWorktreeKey,
   ThreadWorktreeLink,
   ThreadWorktreeLinkSource,
+  ThreadWorktreePullRequest,
 } from "./threadWorktree.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
@@ -1198,6 +1199,17 @@ const ThreadWorktreeDetachCommand = Schema.Struct({
   ...ThreadWorktreeKey.fields,
 });
 
+// Server-only: records an attached worktree's checked-out branch and the pull
+// request detected for it.
+const ThreadWorktreeSyncCommand = Schema.Struct({
+  type: Schema.Literal("thread.worktree.sync"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  ...ThreadWorktreeKey.fields,
+  branch: Schema.NullOr(TrimmedNonEmptyString),
+  pullRequest: Schema.NullOr(ThreadWorktreePullRequest),
+});
+
 const ThreadRuntimeModeSetCommand = Schema.Struct({
   type: Schema.Literal("thread.runtime-mode.set"),
   commandId: CommandId,
@@ -1533,6 +1545,7 @@ const InternalOrchestrationCommand = Schema.Union([
   // Server-only: attaching validates the checkout on disk first, so clients
   // go through the vcs.attachThreadWorktree RPC instead.
   ThreadWorktreeAttachCommand,
+  ThreadWorktreeSyncCommand,
   ThreadPullRequestSyncCommand,
   ThreadPullRequestLinkSyncCommand,
   ThreadSessionSetCommand,
@@ -2165,6 +2178,8 @@ export type DispatchResult = typeof DispatchResult.Type;
 export const OrchestrationGetTurnDiffInput = TurnCountRange.mapFields(
   Struct.assign({
     threadId: ThreadId,
+    // An attached worktree to diff instead of the thread's primary workspace.
+    worktreePath: Schema.optionalKey(TrimmedNonEmptyString),
     ignoreWhitespace: Schema.optionalKey(Schema.Boolean),
   }),
   { unsafePreserveChecks: true },
@@ -2177,6 +2192,7 @@ export type OrchestrationGetTurnDiffResult = typeof OrchestrationGetTurnDiffResu
 export const OrchestrationGetFullThreadDiffInput = Schema.Struct({
   threadId: ThreadId,
   toTurnCount: NonNegativeInt,
+  worktreePath: Schema.optionalKey(TrimmedNonEmptyString),
   ignoreWhitespace: Schema.optionalKey(Schema.Boolean),
 });
 export type OrchestrationGetFullThreadDiffInput = typeof OrchestrationGetFullThreadDiffInput.Type;

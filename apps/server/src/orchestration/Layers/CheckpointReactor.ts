@@ -20,10 +20,12 @@ import type * as PlatformError from "effect/PlatformError";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
+import { threadWorktrees } from "@t3tools/shared/threadWorktrees";
 
 import { parseTurnDiffFilesFromNumstat } from "../../checkpointing/Diffs.ts";
 import {
   checkpointRefForThreadTurn,
+  checkpointRefForThreadWorktreeTurn,
   resolveThreadWorkspaceCwd,
 } from "../../checkpointing/Utils.ts";
 import * as CheckpointStore from "../../checkpointing/CheckpointStore.ts";
@@ -214,6 +216,57 @@ const make = Effect.gen(function* () {
       return undefined;
     }
     return cwd;
+  });
+
+  // Attached worktrees that can hold checkpoints. A missing or non-git path is
+  // skipped so one broken attachment never blocks the thread's own checkpoints.
+  const resolveAttachedCheckpointPaths = Effect.fn("resolveAttachedCheckpointPaths")(function* (
+    thread: Parameters<typeof threadWorktrees>[0],
+  ) {
+    const paths = yield* Effect.forEach(threadWorktrees(thread), (link) =>
+      checkpointStore.isGitRepository(link.worktreePath).pipe(
+        Effect.orElseSucceed(() => false),
+        Effect.map((isRepository) => (isRepository ? link.worktreePath : null)),
+      ),
+    );
+    return paths.filter((path): path is string => path !== null);
+  });
+
+  // Captures each attached worktree's ref for a turn. Baselines keep an
+  // existing ref; completions overwrite it like the primary checkpoint does.
+  const captureAttachedCheckpoints = Effect.fn("captureAttachedCheckpoints")(function* (input: {
+    readonly threadId: ThreadId;
+    readonly paths: ReadonlyArray<string>;
+    readonly turnCount: number;
+    readonly overwrite: boolean;
+  }) {
+    yield* Effect.forEach(
+      input.paths,
+      (path) =>
+        Effect.gen(function* () {
+          const checkpointRef = checkpointRefForThreadWorktreeTurn(
+            input.threadId,
+            path,
+            input.turnCount,
+          );
+          if (
+            !input.overwrite &&
+            (yield* checkpointStore.hasCheckpointRef({ cwd: path, checkpointRef }))
+          ) {
+            return;
+          }
+          yield* checkpointStore.captureCheckpoint({ cwd: path, checkpointRef });
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("failed to capture attached worktree checkpoint", {
+              threadId: input.threadId,
+              worktreePath: path,
+              detail: error.message,
+            }),
+          ),
+        ),
+      { discard: true },
+    );
   });
 
   // Capture the completed turn's files, then publish its summary and receipts.
@@ -409,6 +462,12 @@ const make = Effect.gen(function* () {
         ? existingPlaceholder.checkpointTurnCount
         : currentTurnCount + 1;
 
+      yield* captureAttachedCheckpoints({
+        threadId: thread.id,
+        paths: yield* resolveAttachedCheckpointPaths(thread),
+        turnCount: nextTurnCount,
+        overwrite: true,
+      });
       yield* captureAndDispatchCheckpoint({
         threadId: thread.id,
         turnId,
@@ -453,6 +512,12 @@ const make = Effect.gen(function* () {
         0,
       );
       const baselineCheckpointRef = checkpointRefForThreadTurn(thread.id, currentTurnCount);
+      yield* captureAttachedCheckpoints({
+        threadId: thread.id,
+        paths: yield* resolveAttachedCheckpointPaths(thread),
+        turnCount: currentTurnCount,
+        overwrite: false,
+      });
       const baselineExists = yield* checkpointStore.hasCheckpointRef({
         cwd: checkpointCwd,
         checkpointRef: baselineCheckpointRef,
@@ -506,6 +571,66 @@ const make = Effect.gen(function* () {
         local,
       });
     }
+    yield* followAttachedWorktreeDrift(event.threadId);
+  });
+
+  // Attached worktrees drift the same way as the thread's own worktree. Their
+  // branch lives on the link, and a new branch drops the pull request that was
+  // detected for the old one. Shared checkouts keep their recorded branch.
+  const followAttachedWorktreeDrift = Effect.fn("followAttachedWorktreeDrift")(function* (
+    threadId: ThreadId,
+  ) {
+    const thread = yield* projectionSnapshotQuery
+      .getThreadShellById(threadId)
+      .pipe(Effect.map(Option.getOrUndefined));
+    const links = thread ? threadWorktrees(thread) : [];
+    if (links.length === 0) {
+      return;
+    }
+    const shell = yield* projectionSnapshotQuery.getShellSnapshot();
+    yield* Effect.forEach(
+      links,
+      (link) =>
+        Effect.gen(function* () {
+          const local = yield* vcsStatusBroadcaster.refreshLocalStatus(link.worktreePath);
+          const checkedOutBranch = local.refName;
+          if (
+            checkedOutBranch === null ||
+            isTemporaryWorktreeBranch(checkedOutBranch) ||
+            checkedOutBranch === link.branch
+          ) {
+            return;
+          }
+          const shared = shell.threads.some(
+            (other) =>
+              other.id !== threadId &&
+              (other.worktreePath === link.worktreePath ||
+                threadWorktrees(other).some((entry) => entry.worktreePath === link.worktreePath)),
+          );
+          if (shared) {
+            return;
+          }
+          yield* orchestrationEngine.dispatch({
+            type: "thread.worktree.sync",
+            commandId: yield* serverCommandId("attached-worktree-branch-drift"),
+            threadId,
+            worktreePath: link.worktreePath,
+            branch: checkedOutBranch,
+            pullRequest: null,
+          });
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.failCause(cause)
+              : Effect.logWarning("failed to follow attached worktree branch drift", {
+                  threadId,
+                  worktreePath: link.worktreePath,
+                  cause: Cause.pretty(cause),
+                }),
+          ),
+        ),
+      { discard: true },
+    );
   });
 
   // Retry a missing PR after the agent finishes its push and PR creation.
@@ -662,6 +787,12 @@ const make = Effect.gen(function* () {
       0,
     );
     const baselineCheckpointRef = checkpointRefForThreadTurn(threadId, currentTurnCount);
+    yield* captureAttachedCheckpoints({
+      threadId,
+      paths: yield* resolveAttachedCheckpointPaths(thread),
+      turnCount: currentTurnCount,
+      overwrite: false,
+    });
     const baselineExists = yield* checkpointStore.hasCheckpointRef({
       cwd: checkpointCwd,
       checkpointRef: baselineCheckpointRef,
@@ -680,6 +811,34 @@ const make = Effect.gen(function* () {
       checkpointTurnCount: currentTurnCount,
       checkpointRef: baselineCheckpointRef,
       createdAt: event.occurredAt,
+    });
+  });
+
+  // A worktree attached during a thread gets its baseline right away, so the
+  // turn that attached it can still diff and revert the edits made there.
+  const captureAttachedWorktreeBaseline = Effect.fn("captureAttachedWorktreeBaseline")(function* (
+    event: Extract<OrchestrationEvent, { type: "thread.worktree-attached" }>,
+  ) {
+    const thread = yield* resolveThreadDetail(event.payload.threadId);
+    if (!thread) {
+      return;
+    }
+    const worktreePath = event.payload.link.worktreePath;
+    const isRepository = yield* checkpointStore
+      .isGitRepository(worktreePath)
+      .pipe(Effect.orElseSucceed(() => false));
+    if (!isRepository) {
+      return;
+    }
+    const currentTurnCount = thread.checkpoints.reduce(
+      (maxTurnCount, checkpoint) => Math.max(maxTurnCount, checkpoint.checkpointTurnCount),
+      0,
+    );
+    yield* captureAttachedCheckpoints({
+      threadId: thread.id,
+      paths: [worktreePath],
+      turnCount: currentTurnCount,
+      overwrite: false,
     });
   });
 
@@ -726,6 +885,7 @@ const make = Effect.gen(function* () {
     }
 
     yield* providerService.assertConversationRollbackSupported(event.payload.threadId);
+    const attachedPaths = yield* resolveAttachedCheckpointPaths(thread);
 
     if (event.payload.restoreFiles !== false) {
       if (!checkpointCwd) {
@@ -773,6 +933,52 @@ const make = Effect.gen(function* () {
       // Refresh the workspace entry index so the @-mention file picker
       // reflects the reverted filesystem state.
       yield* workspaceEntries.refresh(checkpointCwd);
+
+      // Attached worktrees return to the same turn. One attached after that turn
+      // has no ref for it and returns to its first ref instead: its state when
+      // the thread attached it.
+      for (const path of attachedPaths) {
+        let restoreTurnCount: number | null = null;
+        for (
+          let candidate = event.payload.turnCount;
+          candidate <= currentTurnCount;
+          candidate += 1
+        ) {
+          const exists = yield* checkpointStore.hasCheckpointRef({
+            cwd: path,
+            checkpointRef: checkpointRefForThreadWorktreeTurn(
+              event.payload.threadId,
+              path,
+              candidate,
+            ),
+          });
+          if (exists) {
+            restoreTurnCount = candidate;
+            break;
+          }
+        }
+        if (restoreTurnCount === null) {
+          continue;
+        }
+        const restoredAttached = yield* checkpointStore.restoreCheckpoint({
+          cwd: path,
+          checkpointRef: checkpointRefForThreadWorktreeTurn(
+            event.payload.threadId,
+            path,
+            restoreTurnCount,
+          ),
+          fallbackToHead: false,
+        });
+        if (!restoredAttached) {
+          yield* appendRevertFailureActivity({
+            threadId: event.payload.threadId,
+            turnCount: event.payload.turnCount,
+            detail: `Filesystem checkpoint is unavailable for attached worktree ${path}.`,
+            createdAt: now,
+          }).pipe(Effect.catch(() => Effect.void));
+          return;
+        }
+      }
     }
 
     const rolledBackTurns = Math.max(0, currentTurnCount - event.payload.turnCount);
@@ -795,6 +1001,25 @@ const make = Effect.gen(function* () {
         cwd: checkpointCwd,
         checkpointRefs: staleCheckpointRefs,
       });
+    }
+
+    for (const path of attachedPaths) {
+      const staleAttachedRefs: Array<CheckpointRef> = [];
+      for (
+        let candidate = event.payload.turnCount + 1;
+        candidate <= currentTurnCount;
+        candidate += 1
+      ) {
+        staleAttachedRefs.push(
+          checkpointRefForThreadWorktreeTurn(event.payload.threadId, path, candidate),
+        );
+      }
+      if (staleAttachedRefs.length > 0) {
+        yield* checkpointStore.deleteCheckpointRefs({
+          cwd: path,
+          checkpointRefs: staleAttachedRefs,
+        });
+      }
     }
 
     yield* orchestrationEngine
@@ -822,6 +1047,11 @@ const make = Effect.gen(function* () {
     if (event.type === "thread.turn-start-requested" || event.type === "thread.message-sent") {
       if (event.type === "thread.turn-start-requested") pending.add(event.payload.threadId);
       yield* ensurePreTurnBaselineFromDomainTurnStart(event);
+      return;
+    }
+
+    if (event.type === "thread.worktree-attached") {
+      yield* captureAttachedWorktreeBaseline(event);
       return;
     }
 
@@ -938,7 +1168,8 @@ const make = Effect.gen(function* () {
         if (
           event.type !== "thread.turn-start-requested" &&
           event.type !== "thread.message-sent" &&
-          event.type !== "thread.checkpoint-revert-requested"
+          event.type !== "thread.checkpoint-revert-requested" &&
+          event.type !== "thread.worktree-attached"
         ) {
           return Effect.void;
         }

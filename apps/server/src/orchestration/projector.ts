@@ -695,13 +695,17 @@ export function projectEvent(
           if (!thread) {
             return nextBase;
           }
-          const others = threadWorktrees(thread).filter(
-            (link) => !threadWorktreeKeysEqual(link, payload.link),
-          );
+          const links = threadWorktrees(thread);
+          const known = links.some((link) => threadWorktreeKeysEqual(link, payload.link));
           return {
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
-              worktrees: [...others, payload.link],
+              // A sync replaces its link in place so attached worktrees keep their order.
+              worktrees: known
+                ? links.map((link) =>
+                    threadWorktreeKeysEqual(link, payload.link) ? payload.link : link,
+                  )
+                : [...links, payload.link],
               updatedAt: payload.updatedAt,
             }),
           };

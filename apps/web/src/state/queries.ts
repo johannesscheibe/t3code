@@ -332,6 +332,7 @@ export function useCheckpointDiff(
           environmentId: target.environmentId!,
           input: {
             threadId: target.threadId!,
+            ...(target.worktreePath ? { worktreePath: target.worktreePath } : {}),
             toTurnCount: target.toTurnCount!,
             ignoreWhitespace: target.ignoreWhitespace,
           },
@@ -343,6 +344,7 @@ export function useCheckpointDiff(
           environmentId: target.environmentId!,
           input: {
             threadId: target.threadId!,
+            ...(target.worktreePath ? { worktreePath: target.worktreePath } : {}),
             fromTurnCount: target.fromTurnCount!,
             toTurnCount: target.toTurnCount!,
             ignoreWhitespace: target.ignoreWhitespace,

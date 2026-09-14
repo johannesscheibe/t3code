@@ -133,18 +133,22 @@ const makeHarness = Effect.fn("makeThreadPullRequestHarness")(function* (options
   readonly summary?: PullRequestService["Service"]["summary"];
   readonly existingWorktrees?: ReadonlyArray<string>;
   readonly project?: OrchestrationProjectShell;
+  readonly extraProjects?: ReadonlyArray<OrchestrationProjectShell>;
   readonly resolveRepositoryIdentity?: RepositoryIdentityResolver["Service"]["resolve"];
 }) {
   const activation = yield* Deferred.make<void>();
   const snapshots = yield* Ref.make<OrchestrationShellSnapshot>({
     snapshotSequence: 1,
-    projects: [options.project ?? project],
+    projects: [options.project ?? project, ...(options.extraProjects ?? [])],
     threads: options.threads,
     updatedAt: NOW,
   });
   const reads = yield* Queue.unbounded<void>();
   const events = yield* PubSub.unbounded<OrchestrationEvent>();
   const commands = yield* Ref.make<ReadonlyArray<SyncCommand>>([]);
+  const worktreeSyncs = yield* Ref.make<
+    ReadonlyArray<Extract<OrchestrationCommand, { type: "thread.worktree.sync" }>>
+  >([]);
   const branchCalls = yield* Ref.make<
     ReadonlyArray<{ readonly cwd: string; readonly branch: string; readonly refresh: boolean }>
   >([]);
@@ -182,6 +186,11 @@ const makeHarness = Effect.fn("makeThreadPullRequestHarness")(function* (options
         Effect.map((subscription) => Stream.fromSubscription(subscription)),
       ),
       dispatch: (command) => {
+        if (command.type === "thread.worktree.sync") {
+          return Ref.update(worktreeSyncs, (current) => [...current, command]).pipe(
+            Effect.as({ sequence: 1 }),
+          );
+        }
         if (command.type !== "thread.pull-request.sync") {
           return Effect.die(`Unexpected command: ${command.type}`);
         }
@@ -234,6 +243,7 @@ const makeHarness = Effect.fn("makeThreadPullRequestHarness")(function* (options
     reads,
     snapshots,
     commands,
+    worktreeSyncs,
     branchCalls,
     summaryCalls,
     publish: (event: OrchestrationEvent) => PubSub.publish(events, event),
@@ -639,5 +649,68 @@ describe("ThreadPullRequestReactor", () => {
           }).pipe(Effect.provide(fixture.layer));
         }),
       ),
+  );
+  it.effect("detects the pull request of an attached worktree's branch in its own repository", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const libraryKey = "github.com/owner/library";
+        const libraryProject = {
+          ...project,
+          id: ProjectId.make("library"),
+          title: "Library",
+          workspaceRoot: "/workspace/library",
+          repositoryIdentity: {
+            ...project.repositoryIdentity,
+            canonicalKey: libraryKey,
+            displayName: "owner/library",
+            rootPath: "/workspace/library",
+          },
+        } satisfies OrchestrationProjectShell;
+        const fixture = yield* makeHarness({
+          threads: [
+            thread("attached", {
+              branch: null,
+              worktrees: [
+                {
+                  worktreePath: "/worktrees/library",
+                  projectId: libraryProject.id,
+                  branch: "feature",
+                  source: "agent",
+                  linkedAt: NOW,
+                },
+              ],
+            }),
+          ],
+          extraProjects: [libraryProject],
+          existingWorktrees: ["/worktrees/library"],
+          branchPullRequest: (input) =>
+            Effect.succeed(
+              input.cwd === "/worktrees/library"
+                ? {
+                    ...branchPullRequest(7),
+                    url: "https://github.com/owner/library/pull/7",
+                    repositoryKey: libraryKey,
+                  }
+                : null,
+            ),
+        });
+        yield* Effect.gen(function* () {
+          yield* fixture.start();
+          expect(yield* Ref.get(fixture.worktreeSyncs)).toMatchObject([
+            {
+              threadId: "attached",
+              worktreePath: "/worktrees/library",
+              branch: "feature",
+              pullRequest: {
+                number: 7,
+                url: "https://github.com/owner/library/pull/7",
+                state: "open",
+              },
+            },
+          ]);
+          expect(yield* Ref.get(fixture.commands)).toEqual([]);
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
   );
 });

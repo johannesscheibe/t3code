@@ -22,4 +22,6 @@ export interface CheckpointDiffTarget {
   readonly toTurnCount: number | null;
   readonly ignoreWhitespace: boolean;
   readonly cacheScope?: string | null;
+  /** An attached worktree to diff instead of the thread's primary workspace. */
+  readonly worktreePath?: string | null;
 }

@@ -5,9 +5,11 @@ import {
   ThreadId,
   ThreadWorktreeKey,
   ThreadWorktreeLinkSource,
+  ThreadWorktreePullRequest,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+import * as Struct from "effect/Struct";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -23,8 +25,15 @@ export const ProjectionThreadWorktree = Schema.Struct({
   branch: Schema.NullOr(TrimmedNonEmptyString),
   source: ThreadWorktreeLinkSource,
   linkedAt: IsoDateTime,
+  pullRequest: Schema.NullOr(ThreadWorktreePullRequest),
 });
 export type ProjectionThreadWorktree = typeof ProjectionThreadWorktree.Type;
+
+const ProjectionThreadWorktreeDbRow = ProjectionThreadWorktree.mapFields(
+  Struct.assign({
+    pullRequest: Schema.NullOr(Schema.fromJsonString(ThreadWorktreePullRequest)),
+  }),
+);
 
 export const ListProjectionThreadWorktreesInput = Schema.Struct({
   threadId: ThreadId,
@@ -77,7 +86,8 @@ export const make = Effect.gen(function* () {
         project_id,
         branch,
         source,
-        linked_at
+        linked_at,
+        pull_request_json
       )
       VALUES (
         ${row.threadId},
@@ -85,20 +95,22 @@ export const make = Effect.gen(function* () {
         ${row.projectId},
         ${row.branch},
         ${row.source},
-        ${row.linkedAt}
+        ${row.linkedAt},
+        ${row.pullRequest === null ? null : JSON.stringify(row.pullRequest)}
       )
       ON CONFLICT (thread_id, worktree_path)
       DO UPDATE SET
         project_id = excluded.project_id,
         branch = excluded.branch,
         source = excluded.source,
-        linked_at = excluded.linked_at
+        linked_at = excluded.linked_at,
+        pull_request_json = excluded.pull_request_json
     `,
   });
 
   const listAllRows = SqlSchema.findAll({
     Request: Schema.Void,
-    Result: ProjectionThreadWorktree,
+    Result: ProjectionThreadWorktreeDbRow,
     execute: () => sql`
       SELECT
         thread_id AS "threadId",
@@ -106,7 +118,8 @@ export const make = Effect.gen(function* () {
         project_id AS "projectId",
         branch,
         source,
-        linked_at AS "linkedAt"
+        linked_at AS "linkedAt",
+        pull_request_json AS "pullRequest"
       FROM projection_thread_worktrees
       ORDER BY thread_id ASC, linked_at ASC, worktree_path ASC
     `,
@@ -114,7 +127,7 @@ export const make = Effect.gen(function* () {
 
   const listRowsByThread = SqlSchema.findAll({
     Request: ListProjectionThreadWorktreesInput,
-    Result: ProjectionThreadWorktree,
+    Result: ProjectionThreadWorktreeDbRow,
     execute: ({ threadId }) => sql`
       SELECT
         thread_id AS "threadId",
@@ -122,7 +135,8 @@ export const make = Effect.gen(function* () {
         project_id AS "projectId",
         branch,
         source,
-        linked_at AS "linkedAt"
+        linked_at AS "linkedAt",
+        pull_request_json AS "pullRequest"
       FROM projection_thread_worktrees
       WHERE thread_id = ${threadId}
       ORDER BY linked_at ASC, worktree_path ASC
