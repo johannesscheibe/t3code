@@ -2,7 +2,11 @@ import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools
 import { describe, expect, it } from "vite-plus/test";
 
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
-import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "./worktreeCleanup";
+import {
+  formatWorktreePathForDisplay,
+  getOrphanedAttachedWorktrees,
+  getOrphanedWorktreePathForThread,
+} from "./worktreeCleanup";
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
 
@@ -83,6 +87,54 @@ describe("getOrphanedWorktreePathForThread", () => {
     ];
     const result = getOrphanedWorktreePathForThread(threads, ThreadId.make("thread-1"));
     expect(result).toBe("/tmp/repo/worktrees/feature-a");
+  });
+});
+
+function attachedWorktree(worktreePath: string) {
+  return {
+    worktreePath,
+    projectId: ProjectId.make("project-library"),
+    branch: null,
+    source: "manual" as const,
+    linkedAt: "2026-02-13T00:00:00.000Z",
+  };
+}
+
+describe("attached worktree cleanup", () => {
+  it("keeps a thread's own worktree when another thread has it attached", () => {
+    const threads = [
+      makeThread({ id: ThreadId.make("thread-1"), worktreePath: "/tmp/repo/worktrees/feature-a" }),
+      makeThread({
+        id: ThreadId.make("thread-2"),
+        worktrees: [attachedWorktree("/tmp/repo/worktrees/feature-a/")],
+      }),
+    ];
+
+    expect(getOrphanedWorktreePathForThread(threads, ThreadId.make("thread-1"))).toBeNull();
+  });
+
+  it("offers only attached worktrees that no other thread works in", () => {
+    const threads = [
+      makeThread({
+        id: ThreadId.make("thread-1"),
+        worktrees: [
+          attachedWorktree("/tmp/library-a"),
+          attachedWorktree("/tmp/library-b"),
+          attachedWorktree("/tmp/library-c"),
+        ],
+      }),
+      makeThread({ id: ThreadId.make("thread-2"), worktreePath: "/tmp/library-b" }),
+      makeThread({
+        id: ThreadId.make("thread-3"),
+        worktrees: [attachedWorktree("/tmp/library-c/")],
+      }),
+    ];
+
+    expect(
+      getOrphanedAttachedWorktrees(threads, ThreadId.make("thread-1")).map(
+        (link) => link.worktreePath,
+      ),
+    ).toEqual(["/tmp/library-a"]);
   });
 });
 

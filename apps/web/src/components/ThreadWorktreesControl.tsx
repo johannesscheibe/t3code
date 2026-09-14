@@ -13,14 +13,21 @@ import {
   GitPullRequestIcon,
   UnlinkIcon,
 } from "lucide-react";
+import { settlePromise } from "@t3tools/client-runtime/state/runtime";
 import { memo, useMemo, useState } from "react";
 
-import { useProjects, useServerConfigs } from "~/state/entities";
+import {
+  readEnvironmentThreadRefs,
+  readProject,
+  readThreadShell,
+  useProjects,
+  useServerConfigs,
+} from "~/state/entities";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { vcsEnvironment } from "~/state/vcs";
 import { readLocalApi } from "~/localApi";
-import { formatWorktreePathForDisplay } from "~/worktreeCleanup";
+import { formatWorktreePathForDisplay, getOrphanedAttachedWorktrees } from "~/worktreeCleanup";
 import { composerFloatingLayerProps } from "./chat/composerEventScope";
 import { Button } from "./ui/button";
 import {
@@ -55,6 +62,7 @@ export const ThreadWorktreesControl = memo(function ThreadWorktreesControl({
     useServerConfigs().get(environmentId)?.environment.capabilities.threadWorktrees === true;
   const projects = useProjects();
   const detach = useAtomCommand(threadEnvironment.detachWorktree);
+  const removeWorktree = useAtomCommand(vcsEnvironment.removeWorktree);
   const [dialogOpen, setDialogOpen] = useState(false);
   const links = thread.worktrees ?? NO_WORKTREES;
 
@@ -70,6 +78,45 @@ export const ThreadWorktreesControl = memo(function ThreadWorktreesControl({
       ),
     [environmentProjects, links, thread.projectId],
   );
+
+  // Detaching leaves the files. When no other thread uses the worktree, offer
+  // to delete it too, the same way deleting a thread does.
+  const detachWorktree = async (link: ThreadWorktreeLink) => {
+    const threads = readEnvironmentThreadRefs(environmentId).flatMap((ref) => {
+      const shell = readThreadShell(ref);
+      return shell === null ? [] : [shell];
+    });
+    const orphaned = getOrphanedAttachedWorktrees(threads, thread.id).some(
+      (entry) => entry.worktreePath === link.worktreePath,
+    );
+    const project = readProject({ environmentId, projectId: link.projectId });
+    const localApi = readLocalApi();
+    let deleteWorktree = false;
+    if (orphaned && project !== null && localApi) {
+      const confirmation = await settlePromise(() =>
+        localApi.dialogs.confirm(
+          [
+            "No other thread uses this worktree:",
+            formatWorktreePathForDisplay(link.worktreePath),
+            "",
+            "Delete the worktree too?",
+          ].join("\n"),
+          { variant: "destructive" },
+        ),
+      );
+      if (confirmation._tag === "Failure") return;
+      deleteWorktree = confirmation.value;
+    }
+    const detached = await detach({
+      environmentId,
+      input: { threadId: thread.id, worktreePath: link.worktreePath },
+    });
+    if (detached._tag !== "Success" || !deleteWorktree || project === null) return;
+    await removeWorktree({
+      environmentId,
+      input: { cwd: project.workspaceRoot, path: link.worktreePath, force: true },
+    });
+  };
 
   if (!supported) {
     return null;
@@ -113,14 +160,7 @@ export const ThreadWorktreesControl = memo(function ThreadWorktreesControl({
                 <CopyIcon className="size-3.5" />
                 Copy path
               </MenuItem>
-              <MenuItem
-                onClick={() =>
-                  void detach({
-                    environmentId,
-                    input: { threadId: thread.id, worktreePath: link.worktreePath },
-                  })
-                }
-              >
+              <MenuItem onClick={() => void detachWorktree(link)}>
                 <UnlinkIcon className="size-3.5" />
                 Detach from thread
               </MenuItem>
