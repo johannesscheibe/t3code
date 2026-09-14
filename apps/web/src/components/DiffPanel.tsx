@@ -502,7 +502,9 @@ export default function DiffPanel({
   const openDiffFile = useCallback(
     (filePath: string) => {
       openDiffFilePrimaryAction({
-        threadRef: routeThreadRef,
+        // The thread's file panel reads its primary checkout. A file from an
+        // attached worktree opens in the editor by absolute path instead.
+        threadRef: selectedWorktree === null ? routeThreadRef : null,
         filePath,
         activeCwd,
         repositoryRoot: activeRepositoryRoot,
@@ -525,7 +527,7 @@ export default function DiffPanel({
         },
       });
     },
-    [activeCwd, activeRepositoryRoot, openInPreferredEditor, routeThreadRef],
+    [activeCwd, activeRepositoryRoot, openInPreferredEditor, routeThreadRef, selectedWorktree],
   );
   const toggleDiffFileCollapsed = useCallback(
     (fileKey: string) => {

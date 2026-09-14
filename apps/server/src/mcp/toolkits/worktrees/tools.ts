@@ -94,7 +94,7 @@ export const AttachWorktreeInput = Schema.Struct({
   branch: Schema.optional(
     TrimmedNonEmptyString.annotate({
       description:
-        "Branch to create for the new worktree. Defaults to this thread's branch so related changes share a name.",
+        "Branch to create for the new worktree. Defaults to this thread's branch so related changes share a name. Pass one during the thread's first turn, while its branch has only a placeholder name.",
     }),
   ),
   baseBranch: Schema.optional(

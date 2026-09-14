@@ -13,7 +13,12 @@ import {
   GitPullRequestIcon,
   UnlinkIcon,
 } from "lucide-react";
-import { settlePromise } from "@t3tools/client-runtime/state/runtime";
+import {
+  isAtomCommandInterrupted,
+  settlePromise,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
 import { memo, useMemo, useState } from "react";
 
 import {
@@ -42,8 +47,23 @@ import {
 import { Input } from "./ui/input";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
+import { toastManager } from "./ui/toast";
 
 const NO_WORKTREES: ReadonlyArray<ThreadWorktreeLink> = [];
+
+/** Commands only log their failures, so a failed action the user started shows a toast. */
+function toastCommandFailure(
+  title: string,
+  result: Parameters<typeof isAtomCommandInterrupted>[0],
+): void {
+  if (result._tag !== "Failure" || isAtomCommandInterrupted(result)) return;
+  const error = squashAtomCommandFailure(result);
+  toastManager.add({
+    type: "error",
+    title,
+    description: error instanceof Error ? error.message : "An error occurred.",
+  });
+}
 
 interface ThreadWorktreesControlProps {
   environmentId: EnvironmentId;
@@ -111,11 +131,16 @@ export const ThreadWorktreesControl = memo(function ThreadWorktreesControl({
       environmentId,
       input: { threadId: thread.id, worktreePath: link.worktreePath },
     });
-    if (detached._tag !== "Success" || !deleteWorktree || project === null) return;
-    await removeWorktree({
+    if (detached._tag === "Failure") {
+      toastCommandFailure("Failed to detach worktree", detached);
+      return;
+    }
+    if (!deleteWorktree || project === null) return;
+    const removed = await removeWorktree({
       environmentId,
       input: { cwd: project.workspaceRoot, path: link.worktreePath, force: true },
     });
+    toastCommandFailure("Worktree detached, but deleting it failed", removed);
   };
 
   if (!supported) {
@@ -186,7 +211,11 @@ export const ThreadWorktreesControl = memo(function ThreadWorktreesControl({
           environmentId={environmentId}
           threadId={thread.id}
           projects={attachableProjects}
-          defaultBranch={thread.branch}
+          defaultBranch={
+            thread.branch !== null && !isTemporaryWorktreeBranch(thread.branch)
+              ? thread.branch
+              : null
+          }
           onClose={() => setDialogOpen(false)}
         />
       ) : null}
@@ -213,12 +242,14 @@ function AttachWorktreeDialog({
   const [baseBranch, setBaseBranch] = useState("");
   const [branch, setBranch] = useState(defaultBranch ?? "");
   const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const project = projects.find((candidate) => candidate.id === projectId) ?? null;
   const reuseExisting = existingPath.trim().length > 0;
 
   const submit = async () => {
     if (project === null || pending) return;
     setPending(true);
+    setError(null);
     const result = await attach({
       environmentId,
       input: {
@@ -236,6 +267,11 @@ function AttachWorktreeDialog({
     setPending(false);
     if (result._tag === "Success") {
       onClose();
+      return;
+    }
+    if (!isAtomCommandInterrupted(result)) {
+      const failure = squashAtomCommandFailure(result);
+      setError(failure instanceof Error ? failure.message : "Could not attach the worktree.");
     }
   };
 
@@ -301,6 +337,7 @@ function AttachWorktreeDialog({
               onChange={(event) => setExistingPath(event.target.value)}
             />
           </label>
+          {error ? <p className="text-destructive text-xs">{error}</p> : null}
         </DialogPanel>
         <DialogFooter>
           <Button type="button" variant="outline" size="sm" onClick={onClose} disabled={pending}>
@@ -309,7 +346,7 @@ function AttachWorktreeDialog({
           <Button
             type="button"
             size="sm"
-            disabled={project === null || pending}
+            disabled={project === null || pending || (!reuseExisting && branch.trim() === "")}
             onClick={() => void submit()}
           >
             {pending ? "Attaching..." : reuseExisting ? "Attach" : "Create and attach"}

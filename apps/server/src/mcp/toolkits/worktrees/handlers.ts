@@ -3,6 +3,7 @@ import {
   type OrchestrationProjectShell,
   type OrchestrationThreadShell,
 } from "@t3tools/contracts";
+import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
 import { normalizeThreadWorktreePath, threadWorktrees } from "@t3tools/shared/threadWorktrees";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -103,8 +104,14 @@ const make = Effect.gen(function* () {
         const alreadyAttached = threadWorktrees(thread).some(
           (link) => link.projectId === project.id,
         );
-        // Related changes across repositories read best on one branch name.
-        const branch = input.branch ?? thread.branch ?? undefined;
+        // Related changes across repositories read best on one branch name. During
+        // the first turn the thread's branch is a placeholder that gets renamed
+        // later, so it is not copied into another repository.
+        const threadBranch =
+          thread.branch !== null && !isTemporaryWorktreeBranch(thread.branch)
+            ? thread.branch
+            : undefined;
+        const branch = input.branch ?? threadBranch;
         const { link } = yield* attach(
           {
             threadId: thread.id,

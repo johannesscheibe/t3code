@@ -213,6 +213,15 @@ describe("environment entity projections", () => {
       title: "Cached thread",
       branch: "stale-branch",
       worktreePath: "/repo/stale-worktree",
+      worktrees: [
+        {
+          worktreePath: "/repo/detached-library",
+          projectId: OTHER_PROJECT_ID,
+          branch: null,
+          source: "agent",
+          linkedAt: "2026-03-09T10:00:00.000Z",
+        },
+      ],
       activeOrderKey: "t",
       unsettledAt: "2026-03-09T10:00:00.000Z",
       deletedAt: null,
@@ -227,6 +236,15 @@ describe("environment entity projections", () => {
       title: "Current thread",
       branch: "current-branch",
       worktreePath: "/repo/current-worktree",
+      worktrees: [
+        {
+          worktreePath: "/repo/attached-library",
+          projectId: OTHER_PROJECT_ID,
+          branch: "current-branch",
+          source: "manual" as const,
+          linkedAt: "2026-03-09T12:00:00.000Z",
+        },
+      ],
       activeOrderKey: "f",
       unsettledAt: "2026-03-09T12:00:00.000Z",
     };
@@ -240,6 +258,7 @@ describe("environment entity projections", () => {
       activeOrderKey: "f",
       unsettledAt: "2026-03-09T12:00:00.000Z",
     });
+    expect(merged?.worktrees).toEqual(shell.worktrees);
     expect(merged?.messages).toBe(messages);
   });
 

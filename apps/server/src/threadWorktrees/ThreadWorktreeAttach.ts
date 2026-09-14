@@ -94,6 +94,14 @@ export const make = Effect.gen(function* () {
             return { worktreePath, branch: status.refName, created: false };
           })
         : yield* Effect.gen(function* () {
+            // Without a new branch git would check out the base branch, which the
+            // project's own checkout usually holds already.
+            const newBranch = input.branch;
+            if (newBranch === undefined) {
+              return yield* attachError(
+                `Pass a branch name for the new worktree of ${project.title}.`,
+              );
+            }
             const baseBranch =
               input.baseBranch ??
               (yield* git
@@ -110,7 +118,7 @@ export const make = Effect.gen(function* () {
                 cwd: project.workspaceRoot,
                 refName: baseBranch,
                 baseRefName: baseBranch,
-                ...(input.branch === undefined ? {} : { newRefName: input.branch }),
+                newRefName: newBranch,
                 path: null,
               })
               .pipe(

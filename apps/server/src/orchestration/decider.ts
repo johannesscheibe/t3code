@@ -1130,11 +1130,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         projectId: command.projectId,
       });
       const worktreePath = command.worktreePath;
-      // Attached worktrees live beside the primary workspace, never on top of it.
-      const primaryPath = thread.worktreePath ?? project.workspaceRoot;
+      // Attached worktrees live beside the thread's own workspace, never on top of it.
+      const primaryPath =
+        thread.worktreePath ??
+        readModel.projects.find((entry) => entry.id === thread.projectId)?.workspaceRoot ??
+        null;
       if (
         command.projectId === thread.projectId ||
-        threadWorktreeKeysEqual({ worktreePath }, { worktreePath: primaryPath })
+        (primaryPath !== null &&
+          threadWorktreeKeysEqual({ worktreePath }, { worktreePath: primaryPath }))
       ) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,

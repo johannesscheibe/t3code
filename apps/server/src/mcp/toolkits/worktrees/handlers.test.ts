@@ -215,6 +215,19 @@ describe("worktrees toolkit handlers", () => {
     }),
   );
 
+  it.effect("asks for a branch instead of copying a first-turn placeholder branch", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        thread: { ...makeThread(), branch: "t3code/1a2b3c4d" },
+      });
+      const error = yield* harness.call("attach_worktree", { project: "Lib" }).pipe(Effect.flip);
+      expect(error).toMatchObject({ _tag: "WorktreeAttachFailedError" });
+      expect(error.message).toContain("Pass a branch name");
+      expect(yield* Ref.get(harness.createdWorktrees)).toEqual([]);
+      expect(yield* Ref.get(harness.commands)).toEqual([]);
+    }),
+  );
+
   it.effect("resolves a project by its workspace root and rejects ambiguous titles", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({

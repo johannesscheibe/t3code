@@ -936,48 +936,51 @@ const make = Effect.gen(function* () {
 
       // Attached worktrees return to the same turn. One attached after that turn
       // has no ref for it and returns to its first ref instead: its state when
-      // the thread attached it.
+      // the thread attached it. The primary workspace is already restored, so a
+      // broken attachment is reported and the revert still completes.
       for (const path of attachedPaths) {
-        let restoreTurnCount: number | null = null;
-        for (
-          let candidate = event.payload.turnCount;
-          candidate <= currentTurnCount;
-          candidate += 1
-        ) {
-          const exists = yield* checkpointStore.hasCheckpointRef({
-            cwd: path,
-            checkpointRef: checkpointRefForThreadWorktreeTurn(
+        const outcome = yield* Effect.gen(function* () {
+          for (
+            let candidate = event.payload.turnCount;
+            candidate <= currentTurnCount;
+            candidate += 1
+          ) {
+            const checkpointRef = checkpointRefForThreadWorktreeTurn(
               event.payload.threadId,
               path,
               candidate,
-            ),
-          });
-          if (exists) {
-            restoreTurnCount = candidate;
-            break;
+            );
+            if (yield* checkpointStore.hasCheckpointRef({ cwd: path, checkpointRef })) {
+              const restored = yield* checkpointStore.restoreCheckpoint({
+                cwd: path,
+                checkpointRef,
+                fallbackToHead: false,
+              });
+              return restored ? ("restored" as const) : ("unavailable" as const);
+            }
           }
-        }
-        if (restoreTurnCount === null) {
+          return "missing" as const;
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("failed to restore attached worktree checkpoint", {
+              threadId: event.payload.threadId,
+              worktreePath: path,
+              detail: error.message,
+            }).pipe(Effect.as("unavailable" as const)),
+          ),
+        );
+        if (outcome === "restored") {
           continue;
         }
-        const restoredAttached = yield* checkpointStore.restoreCheckpoint({
-          cwd: path,
-          checkpointRef: checkpointRefForThreadWorktreeTurn(
-            event.payload.threadId,
-            path,
-            restoreTurnCount,
-          ),
-          fallbackToHead: false,
-        });
-        if (!restoredAttached) {
-          yield* appendRevertFailureActivity({
-            threadId: event.payload.threadId,
-            turnCount: event.payload.turnCount,
-            detail: `Filesystem checkpoint is unavailable for attached worktree ${path}.`,
-            createdAt: now,
-          }).pipe(Effect.catch(() => Effect.void));
-          return;
-        }
+        yield* appendRevertFailureActivity({
+          threadId: event.payload.threadId,
+          turnCount: event.payload.turnCount,
+          detail:
+            outcome === "missing"
+              ? `Attached worktree ${path} has no checkpoint to restore.`
+              : `Attached worktree ${path} could not be restored.`,
+          createdAt: now,
+        }).pipe(Effect.catch(() => Effect.void));
       }
     }
 

@@ -194,6 +194,31 @@ it.layer(NodeServices.layer)("thread worktree decider", (it) => {
     }),
   );
 
+  it.effect(
+    "compares an attachment with the thread's own workspace, not the attached project's",
+    () =>
+      Effect.gen(function* () {
+        const base = makeReadModel([]);
+        const localThread: OrchestrationReadModel = {
+          ...base,
+          threads: base.threads.map((thread) => ({ ...thread, worktreePath: null })),
+        };
+        const mainCheckout = yield* decideOrchestrationCommand({
+          readModel: localThread,
+          command: yield* attach({ worktreePath: "/lib" }),
+        });
+        expect(singleEvent(mainCheckout).type).toBe("thread.worktree-attached");
+
+        const ownCheckout = yield* Effect.flip(
+          decideOrchestrationCommand({
+            readModel: localThread,
+            command: yield* attach({ worktreePath: "/app" }),
+          }),
+        );
+        expect(ownCheckout._tag).toBe("OrchestrationCommandInvariantError");
+      }),
+  );
+
   it.effect("rejects detaching a worktree that is not attached", () =>
     Effect.gen(function* () {
       const detach = yield* decodeCommand({
