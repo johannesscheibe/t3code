@@ -334,6 +334,11 @@ export function createVcsEnvironmentAtoms<R, E>(
       concurrency: vcsCommandConcurrency,
       onSettled: invalidateRefs,
     }),
+    // Keyed by thread, not cwd: the server resolves the project's checkout.
+    attachThreadWorktree: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:vcs:attach-thread-worktree",
+      tag: WS_METHODS.vcsAttachThreadWorktree,
+    }),
     createRef: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:vcs:create-ref",
       tag: WS_METHODS.vcsCreateRef,

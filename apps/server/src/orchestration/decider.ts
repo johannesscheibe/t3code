@@ -12,6 +12,7 @@ import {
   type OrchestrationThread,
   type ThreadPullRequestKey,
   type ThreadPullRequestLink,
+  type ThreadWorktreeLink,
   type OrchestrationThreadActivity,
 } from "@t3tools/contracts";
 import {
@@ -20,6 +21,7 @@ import {
   normalizeThreadPullRequestKey,
   threadPullRequestKeysEqual,
 } from "@t3tools/shared/threadPullRequests";
+import { threadWorktreeKeysEqual, threadWorktrees } from "@t3tools/shared/threadWorktrees";
 import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
@@ -134,6 +136,13 @@ function findPullRequestLink(
   key: ThreadPullRequestKey,
 ): ThreadPullRequestLink | undefined {
   return thread.pullRequests.find((link) => threadPullRequestKeysEqual(link, key));
+}
+
+function findWorktreeLink(
+  thread: Pick<OrchestrationThread, "worktrees">,
+  worktreePath: string,
+): ThreadWorktreeLink | undefined {
+  return threadWorktrees(thread).find((link) => threadWorktreeKeysEqual(link, { worktreePath }));
 }
 
 function withEventBase(
@@ -1104,6 +1113,96 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           ...key,
+          updatedAt: occurredAt,
+        },
+      };
+    }
+
+    case "thread.worktree.attach": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const project = yield* requireProject({
+        readModel,
+        command,
+        projectId: command.projectId,
+      });
+      const worktreePath = command.worktreePath;
+      // Attached worktrees live beside the primary workspace, never on top of it.
+      const primaryPath = thread.worktreePath ?? project.workspaceRoot;
+      if (
+        command.projectId === thread.projectId ||
+        threadWorktreeKeysEqual({ worktreePath }, { worktreePath: primaryPath })
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `thread ${command.threadId} already works in project ${command.projectId}; attach a worktree of a different project`,
+        });
+      }
+      if (findWorktreeLink(thread, worktreePath) !== undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `worktree ${worktreePath} is already attached to thread ${command.threadId}`,
+        });
+      }
+      // One worktree per project keeps per-turn checkpoint refs, which are
+      // named by thread and turn only, unique inside each repository.
+      if (threadWorktrees(thread).some((link) => link.projectId === command.projectId)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `thread ${command.threadId} already has a worktree of project ${command.projectId} attached`,
+        });
+      }
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.worktree-attached",
+        payload: {
+          threadId: command.threadId,
+          link: {
+            worktreePath,
+            projectId: command.projectId,
+            branch: command.branch,
+            source: command.source,
+            linkedAt: occurredAt,
+          },
+          updatedAt: occurredAt,
+        },
+      };
+    }
+
+    case "thread.worktree.detach": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const existing = findWorktreeLink(thread, command.worktreePath);
+      if (existing === undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `worktree ${command.worktreePath} is not attached to thread ${command.threadId}`,
+        });
+      }
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.worktree-detached",
+        payload: {
+          threadId: command.threadId,
+          worktreePath: existing.worktreePath,
           updatedAt: occurredAt,
         },
       };

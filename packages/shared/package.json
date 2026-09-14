@@ -191,6 +191,10 @@
       "types": "./src/threadPullRequests.ts",
       "import": "./src/threadPullRequests.ts"
     },
+    "./threadWorktrees": {
+      "types": "./src/threadWorktrees.ts",
+      "import": "./src/threadWorktrees.ts"
+    },
     "./changeRequestUrl": {
       "types": "./src/changeRequestUrl.ts",
       "import": "./src/changeRequestUrl.ts"

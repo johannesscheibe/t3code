@@ -31,6 +31,11 @@ import {
   PullRequestReviewDecision,
   PullRequestState,
 } from "./pullRequest.ts";
+import {
+  ThreadWorktreeKey,
+  ThreadWorktreeLink,
+  ThreadWorktreeLinkSource,
+} from "./threadWorktree.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
@@ -719,6 +724,10 @@ export const OrchestrationThread = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  // Worktrees attached beside the primary workspace. Optional so payloads
+  // from pre-attach servers, and thread literals written before the field
+  // existed, still decode; read through `threadWorktrees()` from shared.
+  worktrees: Schema.optional(Schema.Array(ThreadWorktreeLink)),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -804,6 +813,10 @@ export const OrchestrationThreadShell = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  // Worktrees attached beside the primary workspace. Optional so payloads
+  // from pre-attach servers, and thread literals written before the field
+  // existed, still decode; read through `threadWorktrees()` from shared.
+  worktrees: Schema.optional(Schema.Array(ThreadWorktreeLink)),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -1168,6 +1181,23 @@ const ThreadPullRequestUnlinkCommand = Schema.Struct({
   ...ThreadPullRequestKey.fields,
 });
 
+const ThreadWorktreeAttachCommand = Schema.Struct({
+  type: Schema.Literal("thread.worktree.attach"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  ...ThreadWorktreeKey.fields,
+  projectId: ProjectId,
+  branch: Schema.NullOr(TrimmedNonEmptyString),
+  source: ThreadWorktreeLinkSource,
+});
+
+const ThreadWorktreeDetachCommand = Schema.Struct({
+  type: Schema.Literal("thread.worktree.detach"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  ...ThreadWorktreeKey.fields,
+});
+
 const ThreadRuntimeModeSetCommand = Schema.Struct({
   type: Schema.Literal("thread.runtime-mode.set"),
   commandId: CommandId,
@@ -1337,6 +1367,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadMetaUpdateCommand,
   ThreadPullRequestLinkCommand,
   ThreadPullRequestUnlinkCommand,
+  ThreadWorktreeDetachCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
   ThreadTurnStartCommand,
@@ -1370,6 +1401,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadMetaUpdateCommand,
   ThreadPullRequestLinkCommand,
   ThreadPullRequestUnlinkCommand,
+  ThreadWorktreeDetachCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
   ClientThreadTurnStartCommand,
@@ -1498,6 +1530,9 @@ const ThreadPullRequestLinkSyncCommand = Schema.Struct({
 
 const InternalOrchestrationCommand = Schema.Union([
   ThreadAutoSettleCommand,
+  // Server-only: attaching validates the checkout on disk first, so clients
+  // go through the vcs.attachThreadWorktree RPC instead.
+  ThreadWorktreeAttachCommand,
   ThreadPullRequestSyncCommand,
   ThreadPullRequestLinkSyncCommand,
   ThreadSessionSetCommand,
@@ -1539,6 +1574,8 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.pull-request-linked",
   "thread.pull-request-unlinked",
   "thread.pull-request-synced",
+  "thread.worktree-attached",
+  "thread.worktree-detached",
   "thread.runtime-mode-set",
   "thread.interaction-mode-set",
   "thread.message-sent",
@@ -1718,6 +1755,20 @@ export const ThreadPullRequestSyncedPayload = Schema.Struct({
   updatedAt: IsoDateTime,
 });
 export type ThreadPullRequestSyncedPayload = typeof ThreadPullRequestSyncedPayload.Type;
+
+export const ThreadWorktreeAttachedPayload = Schema.Struct({
+  threadId: ThreadId,
+  link: ThreadWorktreeLink,
+  updatedAt: IsoDateTime,
+});
+export type ThreadWorktreeAttachedPayload = typeof ThreadWorktreeAttachedPayload.Type;
+
+export const ThreadWorktreeDetachedPayload = Schema.Struct({
+  threadId: ThreadId,
+  ...ThreadWorktreeKey.fields,
+  updatedAt: IsoDateTime,
+});
+export type ThreadWorktreeDetachedPayload = typeof ThreadWorktreeDetachedPayload.Type;
 
 export const ThreadRuntimeModeSetPayload = Schema.Struct({
   threadId: ThreadId,
@@ -1948,6 +1999,16 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.pull-request-synced"),
     payload: ThreadPullRequestSyncedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.worktree-attached"),
+    payload: ThreadWorktreeAttachedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.worktree-detached"),
+    payload: ThreadWorktreeDetachedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

@@ -19,6 +19,7 @@ import {
   legacyThreadPullRequestKey,
   threadPullRequestKeysEqual,
 } from "@t3tools/shared/threadPullRequests";
+import { threadWorktreeKeysEqual, threadWorktrees } from "@t3tools/shared/threadWorktrees";
 import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -44,6 +45,8 @@ import {
   ThreadPullRequestLinkedPayload,
   ThreadPullRequestSyncedPayload,
   ThreadPullRequestUnlinkedPayload,
+  ThreadWorktreeAttachedPayload,
+  ThreadWorktreeDetachedPayload,
   ThreadSnoozedPayload,
   ThreadUnpinnedPayload,
   ThreadUnarchivedPayload,
@@ -673,6 +676,55 @@ export function projectEvent(
                 thread,
                 removePullRequestLink(thread.pullRequests, payload),
                 nextBase.projects,
+              ),
+              updatedAt: payload.updatedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.worktree-attached":
+      return decodeForEvent(
+        ThreadWorktreeAttachedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          const others = threadWorktrees(thread).filter(
+            (link) => !threadWorktreeKeysEqual(link, payload.link),
+          );
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              worktrees: [...others, payload.link],
+              updatedAt: payload.updatedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.worktree-detached":
+      return decodeForEvent(
+        ThreadWorktreeDetachedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              worktrees: threadWorktrees(thread).filter(
+                (link) => !threadWorktreeKeysEqual(link, payload),
               ),
               updatedAt: payload.updatedAt,
             }),

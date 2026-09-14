@@ -28,6 +28,7 @@ import {
 import { BranchToolbarBranchSelector } from "./BranchToolbarBranchSelector";
 import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSelector";
 import { BranchToolbarEnvModeSelector } from "./BranchToolbarEnvModeSelector";
+import { ThreadWorktreesControl } from "./ThreadWorktreesControl";
 import { Button } from "./ui/button";
 import {
   Menu,
@@ -631,6 +632,9 @@ export const BranchToolbar = memo(function BranchToolbar({
           {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}
           {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}
         />
+      ) : null}
+      {showGitControls && serverThread ? (
+        <ThreadWorktreesControl environmentId={environmentId} thread={serverThread} />
       ) : null}
     </ComposerSurface.ContextStrip>
   );

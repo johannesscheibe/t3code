@@ -14,6 +14,7 @@ import type {
   TurnId,
 } from "@t3tools/contracts";
 import { threadPullRequestKeysEqual } from "@t3tools/shared/threadPullRequests";
+import { threadWorktreeKeysEqual, threadWorktrees } from "@t3tools/shared/threadWorktrees";
 import { isImportedAgentSessionMessageId } from "@t3tools/contracts";
 import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
 
@@ -295,6 +296,35 @@ export function applyThreadDetailEvent(
         ),
         event.payload.updatedAt,
       );
+
+    case "thread.worktree-attached": {
+      const link = event.payload.link;
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          worktrees: [
+            ...threadWorktrees(thread).filter(
+              (existing) => !threadWorktreeKeysEqual(existing, link),
+            ),
+            link,
+          ],
+          updatedAt: event.payload.updatedAt,
+        },
+      };
+    }
+
+    case "thread.worktree-detached":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          worktrees: threadWorktrees(thread).filter(
+            (existing) => !threadWorktreeKeysEqual(existing, event.payload),
+          ),
+          updatedAt: event.payload.updatedAt,
+        },
+      };
 
     case "thread.pull-request-synced": {
       if (
