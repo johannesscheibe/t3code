@@ -93,6 +93,19 @@ checkpoints but cannot roll back its conversation. The [checkpoint boundary](./o
 therefore rejects revert before touching files. Native permission and question option IDs must
 also survive normalization; a display label is not necessarily a valid reply.
 
+## Attached worktrees
+
+A thread can attach worktrees of other projects. Providers accept extra directories only when a
+session starts, so the [command reactor](../../apps/server/src/orchestration/Layers/ProviderCommandReactor.ts)
+restarts a session with its resume cursor when the attached set changes. A worktree attached
+during a turn becomes writable on the next one.
+
+Claude and the ACP adapters receive the paths as additional directories. Antigravity also admits
+them in its own file-access checks. Codex has no start-time field, so each workspace-write turn
+lists them as writable roots. ACP `session/load` carries no directories, so a loaded Cursor or
+Grok session keeps only its cwd. OpenCode still asks before touching a path outside its directory,
+and that prompt covers attached worktrees.
+
 ## Attachments and stored history
 
 Attachments live outside the project workspace. [ProviderService](../../apps/server/src/provider/Layers/ProviderService.ts)

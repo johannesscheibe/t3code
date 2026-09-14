@@ -1156,14 +1156,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       const occurredAt = yield* nowIso;
-      return {
+      const attachedEvent = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
           occurredAt,
           commandId: command.commandId,
         })),
-        type: "thread.worktree-attached",
+        type: "thread.worktree-attached" as const,
         payload: {
           threadId: command.threadId,
           link: {
@@ -1176,6 +1176,34 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           updatedAt: occurredAt,
         },
       };
+      const attachedActivity = yield* decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "thread.activity.append",
+          commandId: command.commandId,
+          threadId: command.threadId,
+          createdAt: occurredAt,
+          activity: {
+            id: EventId.make(`worktree-attached:${command.commandId}`),
+            kind: "worktree.attached",
+            summary: `Attached ${project.title} worktree`,
+            tone: "info",
+            turnId: null,
+            createdAt: occurredAt,
+            payload: {
+              projectId: command.projectId,
+              worktreePath,
+              branch: command.branch,
+              source: command.source,
+              detail: command.branch ? `${worktreePath} (${command.branch})` : worktreePath,
+            },
+          },
+        },
+      });
+      return [
+        attachedEvent,
+        ...(Array.isArray(attachedActivity) ? attachedActivity : [attachedActivity]),
+      ];
     }
 
     case "thread.worktree.detach": {
@@ -1192,20 +1220,49 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       const occurredAt = yield* nowIso;
-      return {
+      const detachedEvent = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
           occurredAt,
           commandId: command.commandId,
         })),
-        type: "thread.worktree-detached",
+        type: "thread.worktree-detached" as const,
         payload: {
           threadId: command.threadId,
           worktreePath: existing.worktreePath,
           updatedAt: occurredAt,
         },
       };
+      const projectTitle =
+        readModel.projects.find((project) => project.id === existing.projectId)?.title ??
+        existing.worktreePath;
+      const detachedActivity = yield* decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "thread.activity.append",
+          commandId: command.commandId,
+          threadId: command.threadId,
+          createdAt: occurredAt,
+          activity: {
+            id: EventId.make(`worktree-detached:${command.commandId}`),
+            kind: "worktree.detached",
+            summary: `Detached ${projectTitle} worktree`,
+            tone: "info",
+            turnId: null,
+            createdAt: occurredAt,
+            payload: {
+              projectId: existing.projectId,
+              worktreePath: existing.worktreePath,
+              detail: existing.worktreePath,
+            },
+          },
+        },
+      });
+      return [
+        detachedEvent,
+        ...(Array.isArray(detachedActivity) ? detachedActivity : [detachedActivity]),
+      ];
     }
 
     case "thread.pull-request-link.sync": {

@@ -12,6 +12,7 @@ import {
   type RuntimeMode,
   type TurnId,
 } from "@t3tools/contracts";
+import { threadWorktrees } from "@t3tools/shared/threadWorktrees";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
@@ -358,6 +359,9 @@ const make = Effect.gen(function* () {
     );
 
   const threadModelSelections = new Map<string, ModelSelection>();
+  // Attached worktrees each thread's session started with. Adapters take extra
+  // directories only at session start, so a different set restarts the session.
+  const threadSessionDirectories = new Map<string, string>();
   const compactingThreadIds = new Set<ThreadId>();
   type QueuedTurnStart = Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>;
   // Turn starts received while a thread compacts, replayed in order once its session is restored.
@@ -803,6 +807,8 @@ const make = Effect.gen(function* () {
       thread,
       projects: project ? [project] : [],
     });
+    const additionalDirectories = threadWorktrees(thread).map((link) => link.worktreePath);
+    const directoriesKey = additionalDirectories.toSorted().join("\n");
     const refreshWorkspaceSnapshot = effectiveCwd
       ? providerRegistry
           .refreshWorkspaceSnapshot({ instanceId: desiredInstanceId, cwd: effectiveCwd })
@@ -819,12 +825,18 @@ const make = Effect.gen(function* () {
           ...(preferredProvider ? { provider: preferredProvider } : {}),
           providerInstanceId: desiredInstanceId,
           ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+          ...(additionalDirectories.length > 0 ? { additionalDirectories } : {}),
           ...(thread.title ? { title: thread.title } : {}),
           modelSelection: desiredModelSelection,
           ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
           runtimeMode: desiredRuntimeMode,
         })
-        .pipe(Effect.tap(() => refreshWorkspaceSnapshot));
+        .pipe(
+          Effect.tap(() =>
+            Effect.sync(() => threadSessionDirectories.set(threadId, directoriesKey)),
+          ),
+          Effect.tap(() => refreshWorkspaceSnapshot),
+        );
 
     const bindSessionToThread = (session: ProviderSession) =>
       Effect.gen(function* () {
@@ -860,6 +872,7 @@ const make = Effect.gen(function* () {
     if (existingSessionThreadId) {
       const runtimeModeChanged = thread.runtimeMode !== thread.session?.runtimeMode;
       const cwdChanged = effectiveCwd !== activeSession?.cwd;
+      const directoriesChanged = directoriesKey !== (threadSessionDirectories.get(threadId) ?? "");
       const sessionModelSwitch = (yield* providerService.getCapabilities(desiredInstanceId))
         .sessionModelSwitch;
       const modelChanged =
@@ -878,6 +891,7 @@ const make = Effect.gen(function* () {
       if (
         !runtimeModeChanged &&
         !cwdChanged &&
+        !directoriesChanged &&
         !instanceChanged &&
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange
@@ -902,6 +916,7 @@ const make = Effect.gen(function* () {
         previousCwd: activeSession?.cwd,
         desiredCwd: effectiveCwd,
         cwdChanged,
+        directoriesChanged,
         modelChanged,
         instanceChanged,
         shouldRestartForModelChange,

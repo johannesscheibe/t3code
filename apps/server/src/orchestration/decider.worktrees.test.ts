@@ -102,6 +102,15 @@ it.layer(NodeServices.layer)("thread worktree decider", (it) => {
         yield* decideOrchestrationCommand({ readModel: model, command: yield* attach() }),
       );
       expect(attached.type).toBe("thread.worktree-attached");
+      const attachDecision = yield* decideOrchestrationCommand({
+        readModel: model,
+        command: yield* attach(),
+      });
+      expect(
+        (Array.isArray(attachDecision) ? attachDecision : [attachDecision]).map(
+          (event) => event.type,
+        ),
+      ).toEqual(["thread.worktree-attached", "thread.activity-appended"]);
       model = yield* projectEvent(model, { ...attached, sequence: 1 } as OrchestrationEvent);
       expect(model.threads[0]!.worktrees).toEqual([
         {

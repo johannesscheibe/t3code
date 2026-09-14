@@ -1007,6 +1007,9 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             cwd,
             runtimeMode: input.runtimeMode,
             ...(resumeSessionId ? { resumeSessionId } : {}),
+            ...(input.additionalDirectories?.length
+              ? { additionalDirectories: input.additionalDirectories }
+              : {}),
             clientInfo: { name: "t3-code", version: "0.0.0" },
             ...(mcpSession
               ? {

@@ -555,6 +555,9 @@ export function makeCursorAdapter(
             cwd,
             runtimeMode: input.runtimeMode,
             ...(resumeSessionId ? { resumeSessionId } : {}),
+            ...(input.additionalDirectories?.length
+              ? { additionalDirectories: input.additionalDirectories }
+              : {}),
             clientInfo: { name: "t3-code", version: "0.0.0" },
             ...(mcpSession
               ? {
