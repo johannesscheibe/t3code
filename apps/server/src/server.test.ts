@@ -112,6 +112,7 @@ import {
   resolveAvailableEditorsForConfig,
   resolveFileManagerRevealKindForConfig,
 } from "./ws.ts";
+import * as CheckpointStore from "./checkpointing/CheckpointStore.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
@@ -1044,6 +1045,7 @@ const buildAppUnderTest = (options?: {
     );
 
     const appLayer = servedRoutesLayer.pipe(
+      Layer.provide(Layer.mock(CheckpointStore.CheckpointStore)({})),
       Layer.provide(resourceTelemetryLayer),
       Layer.provide(UsageService.layerTest),
       Layer.provide(

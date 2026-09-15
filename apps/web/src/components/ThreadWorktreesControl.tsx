@@ -106,7 +106,7 @@ export const ThreadWorktreesControl = memo(function ThreadWorktreesControl({
       const shell = readThreadShell(ref);
       return shell === null ? [] : [shell];
     });
-    const orphaned = getOrphanedAttachedWorktrees(threads, thread.id).some(
+    const orphaned = getOrphanedAttachedWorktrees(threads, thread.id, environmentProjects).some(
       (entry) => entry.worktreePath === link.worktreePath,
     );
     const project = readProject({ environmentId, projectId: link.projectId });
@@ -260,7 +260,7 @@ function AttachWorktreeDialog({
           : {
               ...(baseBranch.trim() ? { baseBranch: baseBranch.trim() } : {}),
               ...(branch.trim() ? { branch: branch.trim() } : {}),
-              runSetupScript: project.scripts.some((script) => script.runOnWorktreeCreate),
+              runSetupScript: true,
             }),
       },
     });

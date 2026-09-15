@@ -43,19 +43,19 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
 
 describe("getOrphanedWorktreePathForThread", () => {
   it("returns null when the target thread does not exist", () => {
-    const result = getOrphanedWorktreePathForThread([], ThreadId.make("missing-thread"));
+    const result = getOrphanedWorktreePathForThread([], ThreadId.make("missing-thread"), []);
     expect(result).toBeNull();
   });
 
   it("returns null when the target thread has no worktree", () => {
     const threads = [makeThread()];
-    const result = getOrphanedWorktreePathForThread(threads, ThreadId.make("thread-1"));
+    const result = getOrphanedWorktreePathForThread(threads, ThreadId.make("thread-1"), []);
     expect(result).toBeNull();
   });
 
   it("returns the path when no other thread links to that worktree", () => {
     const threads = [makeThread({ worktreePath: "/tmp/repo/worktrees/feature-a" })];
-    const result = getOrphanedWorktreePathForThread(threads, ThreadId.make("thread-1"));
+    const result = getOrphanedWorktreePathForThread(threads, ThreadId.make("thread-1"), []);
     expect(result).toBe("/tmp/repo/worktrees/feature-a");
   });
 
@@ -70,7 +70,7 @@ describe("getOrphanedWorktreePathForThread", () => {
         worktreePath: "/tmp/repo/worktrees/feature-a",
       }),
     ];
-    const result = getOrphanedWorktreePathForThread(threads, ThreadId.make("thread-1"));
+    const result = getOrphanedWorktreePathForThread(threads, ThreadId.make("thread-1"), []);
     expect(result).toBeNull();
   });
 
@@ -85,7 +85,7 @@ describe("getOrphanedWorktreePathForThread", () => {
         worktreePath: "/tmp/repo/worktrees/feature-b",
       }),
     ];
-    const result = getOrphanedWorktreePathForThread(threads, ThreadId.make("thread-1"));
+    const result = getOrphanedWorktreePathForThread(threads, ThreadId.make("thread-1"), []);
     expect(result).toBe("/tmp/repo/worktrees/feature-a");
   });
 });
@@ -110,8 +110,24 @@ describe("attached worktree cleanup", () => {
       }),
     ];
 
-    expect(getOrphanedWorktreePathForThread(threads, ThreadId.make("thread-1"))).toBeNull();
+    expect(getOrphanedWorktreePathForThread(threads, ThreadId.make("thread-1"), [])).toBeNull();
   });
+
+  it.each([false, true])(
+    "preserves registered project roots, with a local thread: %s",
+    (hasLocalThread) => {
+      const root = "/tmp/library";
+      const projects = [{ id: ProjectId.make("project-library"), workspaceRoot: `${root}/` }];
+      const threads = [
+        makeThread({ worktreePath: root, worktrees: [attachedWorktree(root)] }),
+        ...(hasLocalThread
+          ? [makeThread({ id: ThreadId.make("local"), projectId: projects[0]!.id })]
+          : []),
+      ];
+      expect(getOrphanedWorktreePathForThread(threads, threads[0]!.id, projects)).toBeNull();
+      expect(getOrphanedAttachedWorktrees(threads, threads[0]!.id, projects)).toEqual([]);
+    },
+  );
 
   it("offers only attached worktrees that no other thread works in", () => {
     const threads = [
@@ -131,7 +147,7 @@ describe("attached worktree cleanup", () => {
     ];
 
     expect(
-      getOrphanedAttachedWorktrees(threads, ThreadId.make("thread-1")).map(
+      getOrphanedAttachedWorktrees(threads, ThreadId.make("thread-1"), []).map(
         (link) => link.worktreePath,
       ),
     ).toEqual(["/tmp/library-a"]);

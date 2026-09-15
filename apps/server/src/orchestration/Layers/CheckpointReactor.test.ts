@@ -5,6 +5,8 @@ import * as NodePath from "node:path";
 import * as NodeChildProcess from "node:child_process";
 
 import {
+  VcsUnsupportedOperationError,
+  type VcsStatusResult,
   ProviderDriverKind,
   ProviderRuntimeEvent,
   ProviderSession,
@@ -22,6 +24,7 @@ import {
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Clock from "effect/Clock";
+import * as Fiber from "effect/Fiber";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -34,6 +37,12 @@ import * as Stream from "effect/Stream";
 import { it as effectIt } from "@effect/vitest";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+import * as ThreadWorktreeAttach from "../../threadWorktrees/ThreadWorktreeAttach.ts";
+import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+import {
+  ProjectSetupScriptRunner,
+  type ProjectSetupScriptRunnerInput,
+} from "../../project/ProjectSetupScriptRunner.ts";
 import * as CheckpointStore from "../../checkpointing/CheckpointStore.ts";
 import * as VcsDriverRegistry from "../../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../../vcs/VcsProcess.ts";
@@ -232,7 +241,7 @@ function createGitRepository() {
   NodeFS.writeFileSync(NodePath.join(cwd, "README.md"), "v1\n", "utf8");
   runGit(cwd, ["add", "."]);
   runGit(cwd, ["commit", "-m", "Initial"]);
-  return cwd;
+  return NodeFS.realpathSync(cwd);
 }
 
 function gitRefExists(cwd: string, ref: string): boolean {
@@ -265,6 +274,7 @@ async function waitForGitRefExists(cwd: string, ref: string, timeoutMs = 15_000)
 
 describe("CheckpointReactor", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
+    | VcsDriverRegistry.VcsDriverRegistry
     | OrchestrationEngineService
     | CheckpointReactor
     | CheckpointStore.CheckpointStore
@@ -489,8 +499,79 @@ describe("CheckpointReactor", () => {
       );
     }
 
+    const registry = await runtime.runPromise(Effect.service(VcsDriverRegistry.VcsDriverRegistry));
+    const setupCalls: ProjectSetupScriptRunnerInput[] = [];
+    const removedWorktrees: string[] = [];
+    const makeAttach = (store = checkpointStore) =>
+      ThreadWorktreeAttach.make.pipe(
+        Effect.provideService(CheckpointStore.CheckpointStore, store),
+        Effect.provideService(OrchestrationEngineService, engine),
+        Effect.provideService(ProjectionSnapshotQuery, snapshotQuery),
+        Effect.provideService(VcsDriverRegistry.VcsDriverRegistry, registry),
+        Effect.provide(
+          Layer.mergeAll(
+            NodeServices.layer,
+            Layer.mock(GitWorkflowService)({
+              status: ({ cwd }) =>
+                Effect.sync(
+                  () =>
+                    ({
+                      isRepo: true,
+                      refName: runGit(cwd, ["branch", "--show-current"]).trim(),
+                    }) as VcsStatusResult,
+                ),
+              createWorktree: (input) =>
+                Effect.sync(() => {
+                  const path = NodePath.join(input.cwd, "test-worktree");
+                  runGit(input.cwd, [
+                    "worktree",
+                    "add",
+                    "-b",
+                    input.newRefName!,
+                    path,
+                    input.refName,
+                  ]);
+                  return { worktree: { path, refName: input.newRefName! } };
+                }),
+              removeWorktree: (input) =>
+                Effect.sync(() => {
+                  removedWorktrees.push(input.path);
+                  runGit(input.cwd, ["worktree", "remove", "--force", input.path]);
+                }),
+            }),
+            Layer.mock(ProjectSetupScriptRunner)({
+              runForThread: (input) =>
+                Effect.sync(() => {
+                  setupCalls.push(input);
+                  return { status: "no-script" as const };
+                }),
+            }),
+          ),
+        ),
+      );
+    const registerAttachedProject = async (workspaceRoot: string, id = "project-library") => {
+      const projectId = asProjectId(id);
+      await Effect.runPromise(
+        engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.make(`create-${id}`),
+          projectId,
+          title: id,
+          workspaceRoot,
+          defaultModelSelection: null,
+          createdAt,
+        }),
+      );
+      return projectId;
+    };
+
     return {
       engine,
+      makeAttach,
+      checkpointStore,
+      setupCalls,
+      removedWorktrees,
+      registerAttachedProject,
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
       provider,
       cwd,
@@ -1882,106 +1963,252 @@ describe("CheckpointReactor", () => {
     });
   });
 
-  it("reverts an attached worktree to its baseline from when the thread attached it", async () => {
-    const harness = await createHarness({ providerName: ProviderDriverKind.make("claudeAgent") });
-    const createdAt = "2026-01-01T00:00:00.000Z";
-    const threadId = ThreadId.make("thread-1");
-    const libraryCwd = createGitRepository();
-    tempDirs.push(libraryCwd);
+  effectIt.effect("does not expose an attachment before its baseline capture finishes", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() =>
+        createHarness({ seedFilesystemCheckpoints: false }),
+      );
+      const libraryCwd = createGitRepository();
+      tempDirs.push(libraryCwd);
+      const projectId = yield* Effect.promise(() => harness.registerAttachedProject(libraryCwd));
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const attach = yield* harness.makeAttach({
+        ...harness.checkpointStore,
+        captureCheckpoint: (input) =>
+          Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.andThen(harness.checkpointStore.captureCheckpoint(input)),
+          ),
+      });
+      const pending = yield* attach(
+        { threadId: ThreadId.make("thread-1"), projectId, worktreePath: libraryCwd },
+        "agent",
+      ).pipe(
+        Effect.tap(() =>
+          Effect.sync(() =>
+            NodeFS.writeFileSync(NodePath.join(libraryCwd, "README.md"), "edited after attach\n"),
+          ),
+        ),
+        Effect.forkChild,
+      );
+      yield* Deferred.await(started);
+      try {
+        expect(pending.pollUnsafe()).toBeUndefined();
+        expect((yield* Effect.promise(harness.readModel)).threads[0]?.worktrees ?? []).toEqual([]);
+      } finally {
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(pending);
+      }
+      expect(
+        gitShowFileAtRef(
+          libraryCwd,
+          checkpointRefForThreadWorktreeTurn(ThreadId.make("thread-1"), libraryCwd, 0),
+          "README.md",
+        ),
+      ).toBe("v1\n");
+    }),
+  );
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.make("cmd-session-set-attached"),
-        threadId,
-        session: {
+  effectIt.effect.each([false, true])(
+    "fails attachment on baseline errors and cleans only new checkouts: %s",
+    (createNew) =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() => createHarness());
+        const libraryCwd = createGitRepository();
+        tempDirs.push(libraryCwd);
+        const projectId = yield* Effect.promise(() => harness.registerAttachedProject(libraryCwd));
+        const attach = yield* harness.makeAttach({
+          ...harness.checkpointStore,
+          captureCheckpoint: () =>
+            Effect.fail(
+              new VcsUnsupportedOperationError({
+                operation: "captureCheckpoint",
+                kind: "git",
+                detail: "capture failed",
+              }),
+            ),
+        });
+        const error = yield* attach(
+          {
+            threadId: ThreadId.make("thread-1"),
+            projectId,
+            runSetupScript: true,
+            ...(createNew ? { branch: "feature" } : { worktreePath: libraryCwd }),
+          },
+          "agent",
+        ).pipe(Effect.flip);
+        expect(error._tag).toBe("ThreadWorktreeAttachError");
+        expect((yield* Effect.promise(harness.readModel)).threads[0]?.worktrees ?? []).toEqual([]);
+        expect(harness.setupCalls).toEqual([]);
+        expect(harness.removedWorktrees).toEqual(
+          createNew ? [NodePath.join(libraryCwd, "test-worktree")] : [],
+        );
+        expect(NodeFS.readFileSync(NodePath.join(libraryCwd, "README.md"), "utf8")).toBe("v1\n");
+      }),
+  );
+
+  effectIt.effect(
+    "rejects unrelated repositories and canonicalizes linked checkout subdirectories",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() => createHarness());
+        const libraryCwd = createGitRepository();
+        const otherCwd = createGitRepository();
+        tempDirs.push(libraryCwd, otherCwd);
+        const projectId = yield* Effect.promise(() => harness.registerAttachedProject(libraryCwd));
+        const attach = yield* harness.makeAttach();
+        const threadId = ThreadId.make("thread-1");
+        const error = yield* attach({ threadId, projectId, worktreePath: otherCwd }, "manual").pipe(
+          Effect.flip,
+        );
+        expect(error.message).toContain("does not belong");
+        expect((yield* Effect.promise(harness.readModel)).threads[0]?.worktrees ?? []).toEqual([]);
+        const linked = NodePath.join(libraryCwd, "linked");
+        runGit(libraryCwd, ["worktree", "add", "-b", "linked", linked]);
+        const subdir = NodePath.join(linked, "src");
+        NodeFS.mkdirSync(subdir);
+        const result = yield* attach({ threadId, projectId, worktreePath: subdir }, "manual");
+        expect(result.link.worktreePath).toBe(NodeFS.realpathSync(linked));
+      }),
+  );
+
+  effectIt.effect(
+    "rejects attaching to a non-Git primary workspace before creating a checkout",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() =>
+          createHarness({ initializeGit: false, seedFilesystemCheckpoints: false }),
+        );
+        const libraryCwd = createGitRepository();
+        tempDirs.push(libraryCwd);
+        const projectId = yield* Effect.promise(() => harness.registerAttachedProject(libraryCwd));
+        const attach = yield* harness.makeAttach();
+        const error = yield* attach(
+          { threadId: ThreadId.make("thread-1"), projectId, branch: "feature" },
+          "agent",
+        ).pipe(Effect.flip);
+        expect(error.message).toContain("requires a Git primary workspace");
+        expect(NodeFS.existsSync(NodePath.join(libraryCwd, "test-worktree"))).toBe(false);
+        expect((yield* Effect.promise(harness.readModel)).threads[0]?.worktrees ?? []).toEqual([]);
+      }),
+  );
+
+  effectIt.effect("uses independent setup terminals for consecutive project attachments", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() => createHarness());
+      const attach = yield* harness.makeAttach();
+      for (const id of ["library-a", "library-b"]) {
+        const cwd = createGitRepository();
+        tempDirs.push(cwd);
+        const projectId = yield* Effect.promise(() => harness.registerAttachedProject(cwd, id));
+        yield* attach(
+          {
+            threadId: ThreadId.make("thread-1"),
+            projectId,
+            branch: "feature",
+            runSetupScript: true,
+          },
+          "agent",
+        );
+      }
+      expect(harness.setupCalls).toHaveLength(2);
+      expect(new Set(harness.setupCalls.map((call) => call.preferredTerminalId)).size).toBe(2);
+      expect(
+        harness.setupCalls.every((call) => call.preferredTerminalId?.startsWith("setup-worktree-")),
+      ).toBe(true);
+    }),
+  );
+
+  effectIt.effect(
+    "reverts an attached worktree to its baseline from when the thread attached it",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() =>
+          createHarness({ providerName: ProviderDriverKind.make("claudeAgent") }),
+        );
+        const createdAt = "2026-01-01T00:00:00.000Z";
+        const threadId = ThreadId.make("thread-1");
+        const libraryCwd = createGitRepository();
+        tempDirs.push(libraryCwd);
+
+        yield* harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("cmd-session-set-attached"),
           threadId,
+          session: {
+            threadId,
+            status: "ready",
+            providerName: "claudeAgent",
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: createdAt,
+          },
+          createdAt,
+        });
+        yield* harness.engine.dispatch({
+          type: "thread.turn.diff.complete",
+          commandId: CommandId.make("cmd-diff-attached-1"),
+          threadId,
+          turnId: asTurnId("turn-attached-1"),
+          completedAt: createdAt,
+          checkpointRef: checkpointRefForThreadTurn(threadId, 1),
           status: "ready",
-          providerName: "claudeAgent",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: createdAt,
-        },
-        createdAt,
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.diff.complete",
-        commandId: CommandId.make("cmd-diff-attached-1"),
-        threadId,
-        turnId: asTurnId("turn-attached-1"),
-        completedAt: createdAt,
-        checkpointRef: checkpointRefForThreadTurn(threadId, 1),
-        status: "ready",
-        files: [],
-        checkpointTurnCount: 1,
-        createdAt,
-      }),
-    );
+          files: [],
+          checkpointTurnCount: 1,
+          createdAt,
+        });
 
-    // Attached after turn 1: the reactor captures the library's baseline at turn 1.
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "project.create",
-        commandId: CommandId.make("cmd-project-create-library"),
-        projectId: asProjectId("project-library"),
-        title: "Library",
-        workspaceRoot: libraryCwd,
-        defaultModelSelection: null,
-        createdAt,
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.worktree.attach",
-        commandId: CommandId.make("cmd-attach-library"),
-        threadId,
-        worktreePath: libraryCwd,
-        projectId: asProjectId("project-library"),
-        branch: "main",
-        source: "agent",
-      }),
-    );
-    await waitForGitRefExists(
-      libraryCwd,
-      checkpointRefForThreadWorktreeTurn(threadId, libraryCwd, 1),
-    );
+        const projectId = yield* Effect.promise(() => harness.registerAttachedProject(libraryCwd));
+        const attach = yield* harness.makeAttach();
+        yield* attach({ threadId, projectId, worktreePath: libraryCwd }, "agent");
+        expect(
+          gitShowFileAtRef(
+            libraryCwd,
+            checkpointRefForThreadWorktreeTurn(threadId, libraryCwd, 1),
+            "README.md",
+          ),
+        ).toBe("v1\n");
 
-    NodeFS.writeFileSync(NodePath.join(libraryCwd, "README.md"), "library v2\n", "utf8");
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.diff.complete",
-        commandId: CommandId.make("cmd-diff-attached-2"),
-        threadId,
-        turnId: asTurnId("turn-attached-2"),
-        completedAt: createdAt,
-        checkpointRef: checkpointRefForThreadTurn(threadId, 2),
-        status: "ready",
-        files: [],
-        checkpointTurnCount: 2,
-        createdAt,
-      }),
-    );
+        NodeFS.writeFileSync(NodePath.join(libraryCwd, "README.md"), "library v2\n", "utf8");
+        yield* harness.engine.dispatch({
+          type: "thread.turn.diff.complete",
+          commandId: CommandId.make("cmd-diff-attached-2"),
+          threadId,
+          turnId: asTurnId("turn-attached-2"),
+          completedAt: createdAt,
+          checkpointRef: checkpointRefForThreadTurn(threadId, 2),
+          status: "ready",
+          files: [],
+          checkpointTurnCount: 2,
+          createdAt,
+        });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.checkpoint.revert",
-        commandId: CommandId.make("cmd-revert-attached"),
-        threadId,
-        turnCount: 0,
-        createdAt,
+        const reverted = Effect.scoped(
+          Effect.gen(function* () {
+            const events = yield* harness.engine.subscribeDomainEvents;
+            const waiter = yield* Stream.runHead(
+              events.pipe(Stream.filter((event) => event.type === "thread.reverted")),
+            ).pipe(Effect.forkChild);
+            yield* harness.engine.dispatch({
+              type: "thread.checkpoint.revert",
+              commandId: CommandId.make("cmd-revert-attached"),
+              threadId,
+              turnCount: 0,
+              createdAt,
+            });
+            yield* Fiber.join(waiter);
+          }),
+        );
+        yield* reverted;
+        expect(NodeFS.readFileSync(NodePath.join(harness.cwd, "README.md"), "utf8")).toBe("v1\n");
+        expect(NodeFS.readFileSync(NodePath.join(libraryCwd, "README.md"), "utf8")).toBe("v1\n");
+        expect(
+          gitRefExists(libraryCwd, checkpointRefForThreadWorktreeTurn(threadId, libraryCwd, 1)),
+        ).toBe(false);
       }),
-    );
-
-    await waitForEvent(harness.engine, (event) => event.type === "thread.reverted");
-    expect(NodeFS.readFileSync(NodePath.join(harness.cwd, "README.md"), "utf8")).toBe("v1\n");
-    expect(NodeFS.readFileSync(NodePath.join(libraryCwd, "README.md"), "utf8")).toBe("v1\n");
-    expect(
-      gitRefExists(libraryCwd, checkpointRefForThreadWorktreeTurn(threadId, libraryCwd, 1)),
-    ).toBe(false);
-  });
+  );
 
   it("processes consecutive revert requests with deterministic rollback sequencing", async () => {
     const harness = await createHarness();

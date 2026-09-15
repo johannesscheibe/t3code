@@ -1,9 +1,9 @@
-import type { ThreadWorktreeLink } from "@t3tools/contracts";
+import type { OrchestrationProjectShell, ThreadWorktreeLink } from "@t3tools/contracts";
 import { normalizeThreadWorktreePath, threadWorktrees } from "@t3tools/shared/threadWorktrees";
 
 import type { ThreadShell } from "./types";
 
-type WorktreeUser = Pick<ThreadShell, "id" | "worktreePath"> & {
+type WorktreeUser = Pick<ThreadShell, "id" | "projectId" | "worktreePath"> & {
   readonly worktrees?: ReadonlyArray<ThreadWorktreeLink> | undefined;
 };
 
@@ -15,10 +15,20 @@ function normalizeWorktreePath(path: string | null): string | null {
   return normalizeThreadWorktreePath(trimmed);
 }
 
-/** Whether a thread works in the path, as its own worktree or as an attached one. */
-function usesWorktree(thread: WorktreeUser, path: string): boolean {
+type WorktreeProject = Pick<OrchestrationProjectShell, "id" | "workspaceRoot">;
+
+/** Whether a thread works in the path, as its primary workspace or an attachment. */
+function usesWorktree(
+  thread: WorktreeUser,
+  path: string,
+  projects: ReadonlyArray<WorktreeProject>,
+): boolean {
   return (
-    normalizeWorktreePath(thread.worktreePath) === path ||
+    normalizeWorktreePath(
+      thread.worktreePath ??
+        projects.find((project) => project.id === thread.projectId)?.workspaceRoot ??
+        null,
+    ) === path ||
     threadWorktrees(thread).some((link) => normalizeWorktreePath(link.worktreePath) === path)
   );
 }
@@ -26,6 +36,7 @@ function usesWorktree(thread: WorktreeUser, path: string): boolean {
 export function getOrphanedWorktreePathForThread(
   threads: ReadonlyArray<WorktreeUser>,
   threadId: ThreadShell["id"],
+  projects: ReadonlyArray<WorktreeProject>,
 ): string | null {
   const targetThread = threads.find((thread) => thread.id === threadId);
   if (!targetThread) {
@@ -33,12 +44,15 @@ export function getOrphanedWorktreePathForThread(
   }
 
   const targetWorktreePath = normalizeWorktreePath(targetThread.worktreePath);
-  if (!targetWorktreePath) {
+  if (
+    !targetWorktreePath ||
+    projects.some((project) => normalizeWorktreePath(project.workspaceRoot) === targetWorktreePath)
+  ) {
     return null;
   }
 
   const isShared = threads.some(
-    (thread) => thread.id !== threadId && usesWorktree(thread, targetWorktreePath),
+    (thread) => thread.id !== threadId && usesWorktree(thread, targetWorktreePath, projects),
   );
 
   return isShared ? null : targetWorktreePath;
@@ -48,6 +62,7 @@ export function getOrphanedWorktreePathForThread(
 export function getOrphanedAttachedWorktrees(
   threads: ReadonlyArray<WorktreeUser>,
   threadId: ThreadShell["id"],
+  projects: ReadonlyArray<WorktreeProject>,
 ): ReadonlyArray<ThreadWorktreeLink> {
   const targetThread = threads.find((thread) => thread.id === threadId);
   if (!targetThread) {
@@ -57,7 +72,8 @@ export function getOrphanedAttachedWorktrees(
     const path = normalizeWorktreePath(link.worktreePath);
     return (
       path !== null &&
-      !threads.some((thread) => thread.id !== threadId && usesWorktree(thread, path))
+      !projects.some((project) => normalizeWorktreePath(project.workspaceRoot) === path) &&
+      !threads.some((thread) => thread.id !== threadId && usesWorktree(thread, path, projects))
     );
   });
 }

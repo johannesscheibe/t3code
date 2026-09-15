@@ -1,3 +1,7 @@
+import * as NodeCrypto from "node:crypto";
+import * as Path from "effect/Path";
+import * as FileSystem from "effect/FileSystem";
+
 import {
   CommandId,
   ThreadWorktreeAttachError,
@@ -15,6 +19,9 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
+import { CheckpointStore } from "../checkpointing/CheckpointStore.ts";
+import { checkpointRefForThreadWorktreeTurn } from "../checkpointing/Utils.ts";
+import { VcsDriverRegistry } from "../vcs/VcsDriverRegistry.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as OrchestrationEngine from "../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -37,6 +44,10 @@ export const make = Effect.gen(function* () {
   const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const setupScripts = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   const crypto = yield* Crypto.Crypto;
+  const checkpoints = yield* CheckpointStore;
+  const registry = yield* VcsDriverRegistry;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
 
   return Effect.fn("ThreadWorktreeAttach.attach")(function* (
     input: ThreadWorktreeAttachInput,
@@ -66,6 +77,26 @@ export const make = Effect.gen(function* () {
       );
     }
 
+    const checkpointContext = yield* snapshots.getThreadCheckpointContext(input.threadId).pipe(
+      Effect.mapError(attachFailure("Could not read the thread's checkpoint context.")),
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.fail(attachError("The thread's primary project was not found.")),
+          onSome: Effect.succeed,
+        }),
+      ),
+    );
+    const primaryCwd = thread.worktreePath ?? checkpointContext.workspaceRoot;
+    if (
+      !(yield* checkpoints
+        .isGitRepository(primaryCwd)
+        .pipe(Effect.mapError(attachFailure("Could not inspect the thread's primary workspace."))))
+    ) {
+      return yield* attachError(
+        "Attaching worktrees requires a Git primary workspace so changes can be checkpointed and reverted.",
+      );
+    }
+
     const attached = threadWorktrees(thread).find((link) => link.projectId === input.projectId);
     if (attached !== undefined) {
       // The agent asks for "a worktree of project B"; handing back the one the
@@ -84,7 +115,47 @@ export const make = Effect.gen(function* () {
     const checkout =
       input.worktreePath !== undefined
         ? yield* Effect.gen(function* () {
-            const worktreePath = normalizeThreadWorktreePath(input.worktreePath!);
+            const requestedPath = input.worktreePath!;
+            const repository = yield* registry
+              .resolve({ cwd: requestedPath })
+              .pipe(Effect.mapError(attachFailure(`Could not inspect ${requestedPath}.`)));
+            const selected = yield* registry
+              .resolve({ cwd: project.workspaceRoot })
+              .pipe(Effect.mapError(attachFailure(`Could not inspect ${project.workspaceRoot}.`)));
+            if (
+              repository.kind !== "git" ||
+              selected.kind !== "git" ||
+              repository.repository.metadataPath === null ||
+              selected.repository.metadataPath === null
+            ) {
+              return yield* attachError(
+                "The checkout and selected project must be Git repositories.",
+              );
+            }
+            const canonicalPath = (cwd: string, value: string) =>
+              fs
+                .realPath(path.resolve(cwd, value))
+                .pipe(
+                  Effect.mapError(
+                    attachFailure("Could not resolve the checkout's repository paths."),
+                  ),
+                );
+            const commonDir = yield* canonicalPath(
+              requestedPath,
+              repository.repository.metadataPath,
+            );
+            const selectedCommonDir = yield* canonicalPath(
+              project.workspaceRoot,
+              selected.repository.metadataPath,
+            );
+            if (commonDir !== selectedCommonDir) {
+              return yield* attachError(
+                `The checkout does not belong to ${project.title}'s Git repository.`,
+              );
+            }
+            const worktreePath = normalizeThreadWorktreePath(
+              yield* canonicalPath(requestedPath, repository.repository.rootPath),
+            );
             const status = yield* git
               .status({ cwd: worktreePath })
               .pipe(Effect.mapError(attachFailure(`Could not read ${worktreePath}.`)));
@@ -132,8 +203,22 @@ export const make = Effect.gen(function* () {
           });
 
     const uuid = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
-    yield* engine
-      .dispatch({
+    yield* Effect.gen(function* () {
+      // Capture before publishing the link or starting setup. Agents and clients
+      // must never observe an attachment whose baseline still includes future edits.
+      const turnCount = checkpointContext.checkpoints.reduce(
+        (count, checkpoint) => Math.max(count, checkpoint.checkpointTurnCount),
+        0,
+      );
+      const checkpointRef = checkpointRefForThreadWorktreeTurn(
+        input.threadId,
+        checkout.worktreePath,
+        turnCount,
+      );
+      if (!(yield* checkpoints.hasCheckpointRef({ cwd: checkout.worktreePath, checkpointRef }))) {
+        yield* checkpoints.captureCheckpoint({ cwd: checkout.worktreePath, checkpointRef });
+      }
+      yield* engine.dispatch({
         type: "thread.worktree.attach",
         commandId: CommandId.make(`server:thread-worktree-attach:${input.threadId}:${uuid}`),
         threadId: input.threadId,
@@ -141,21 +226,21 @@ export const make = Effect.gen(function* () {
         projectId: input.projectId,
         branch: checkout.branch,
         source,
-      })
-      .pipe(
-        Effect.mapError(attachFailure("Could not attach the worktree to the thread.")),
-        Effect.onError(() =>
-          checkout.created
-            ? git
-                .removeWorktree({
-                  cwd: project.workspaceRoot,
-                  path: checkout.worktreePath,
-                  force: true,
-                })
-                .pipe(Effect.ignoreCause({ log: true }))
-            : Effect.void,
-        ),
-      );
+      });
+    }).pipe(
+      Effect.mapError(attachFailure("Could not attach the worktree to the thread.")),
+      Effect.onError(() =>
+        checkout.created
+          ? git
+              .removeWorktree({
+                cwd: project.workspaceRoot,
+                path: checkout.worktreePath,
+                force: true,
+              })
+              .pipe(Effect.ignoreCause({ log: true }))
+          : Effect.void,
+      ),
+    );
 
     if (checkout.created && input.runSetupScript === true) {
       // The link is already recorded; a failed setup script leaves a usable
@@ -165,6 +250,7 @@ export const make = Effect.gen(function* () {
           threadId: input.threadId,
           projectId: input.projectId,
           projectCwd: project.workspaceRoot,
+          preferredTerminalId: `setup-worktree-${NodeCrypto.createHash("sha256").update(checkout.worktreePath).digest("hex")}`,
           worktreePath: checkout.worktreePath,
         })
         .pipe(

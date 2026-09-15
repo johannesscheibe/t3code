@@ -12,6 +12,10 @@ import {
   type VcsStatusResult,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
+import * as Path from "effect/Path";
+import * as FileSystem from "effect/FileSystem";
+import { CheckpointStore } from "../../../checkpointing/CheckpointStore.ts";
+import { VcsDriverRegistry } from "../../../vcs/VcsDriverRegistry.ts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -29,7 +33,7 @@ import {
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
   ProjectSetupScriptRunner,
-  type ProjectSetupScriptRunnerResult,
+  type ProjectSetupScriptRunnerInput,
 } from "../../../project/ProjectSetupScriptRunner.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { listThreadWorktrees, WorktreesToolkitHandlersLive } from "./handlers.ts";
@@ -110,6 +114,7 @@ const makeHarness = Effect.fn("makeWorktreesToolkitHarness")(function* (
 ) {
   const commands = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
   const createdWorktrees = yield* Ref.make<ReadonlyArray<VcsCreateWorktreeInput>>([]);
+  const setupCalls = yield* Ref.make<ReadonlyArray<ProjectSetupScriptRunnerInput>>([]);
   const thread = options.thread ?? makeThread();
   const projects = options.projects ?? PROJECTS;
   const dispatch: OrchestrationEngineShape["dispatch"] = (command) =>
@@ -133,6 +138,16 @@ const makeHarness = Effect.fn("makeWorktreesToolkitHarness")(function* (
       getProjectShellById: (projectId) =>
         Effect.succeed(Option.fromNullishOr(projects.find((project) => project.id === projectId))),
       getProjectShells: () => Effect.succeed(projects),
+      getThreadCheckpointContext: () =>
+        Effect.succeed(
+          Option.some({
+            threadId: thread.id,
+            projectId: thread.projectId,
+            workspaceRoot: "/code/app",
+            worktreePath: thread.worktreePath,
+            checkpoints: [],
+          }),
+        ),
     }),
     Layer.mock(OrchestrationEngineService)({
       readEvents: () => Stream.empty,
@@ -151,9 +166,19 @@ const makeHarness = Effect.fn("makeWorktreesToolkitHarness")(function* (
       removeWorktree: () => Effect.void,
     }),
     Layer.mock(ProjectSetupScriptRunner)({
-      runForThread: () =>
-        Effect.succeed({ status: "no-script" } as unknown as ProjectSetupScriptRunnerResult),
+      runForThread: (input) =>
+        Ref.update(setupCalls, (calls) => [...calls, input]).pipe(
+          Effect.as({ status: "no-script" as const }),
+        ),
     }),
+    Layer.mock(CheckpointStore)({
+      isGitRepository: () => Effect.succeed(true),
+      hasCheckpointRef: () => Effect.succeed(false),
+      captureCheckpoint: () => Effect.void,
+    }),
+    Layer.mock(VcsDriverRegistry)({}),
+    FileSystem.layerNoop({}),
+    Path.layer,
     Layer.succeed(Crypto.Crypto, testCrypto),
   );
   const toolkit = yield* WorktreesToolkit.pipe(
@@ -173,7 +198,7 @@ const makeHarness = Effect.fn("makeWorktreesToolkitHarness")(function* (
       Effect.provideService(McpInvocationContext.McpInvocationContext, invocation(capabilities)),
       Effect.provide(dependencies),
     );
-  return { commands, createdWorktrees, call };
+  return { commands, createdWorktrees, setupCalls, call };
 });
 
 describe("worktrees toolkit handlers", () => {
@@ -200,6 +225,14 @@ describe("worktrees toolkit handlers", () => {
         branch: "feat/shared-change",
         alreadyAttached: false,
       });
+      // Empty snapshot scripts must still reach the settings-aware setup runner.
+      expect(yield* Ref.get(harness.setupCalls)).toMatchObject([
+        {
+          projectId: LIB,
+          worktreePath: "/worktrees/lib",
+          preferredTerminalId: expect.stringMatching(/^setup-worktree-/),
+        },
+      ]);
       expect(yield* Ref.get(harness.createdWorktrees)).toMatchObject([
         { cwd: "/code/lib", refName: "main", newRefName: "feat/shared-change" },
       ]);

@@ -28,15 +28,16 @@ and choose a project. T3 Code creates a worktree on a new branch, named after th
 branch by default, or attaches an existing checkout path you enter. Agents can also attach
 one when their work reaches another project.
 
-A thread can have one worktree per project. The agent can write to a newly attached
-worktree from its next message. Checkpoints and revert include attached worktrees. In the
+The thread must start in a Git workspace, and an existing checkout must belong to the
+selected project. A thread can have one worktree per project. The agent can write to a
+newly attached worktree from its next message. Checkpoints and revert include attached worktrees. In the
 diff panel, use the selector at the top to switch between repositories. A pull request
 opened from an attached worktree's branch appears on its chip, and on mobile in the
 thread's Git sheet.
 
 To stop working in a repository, open its chip and choose **Detach from thread**. If no
-other thread uses the worktree, you can delete it at the same time. Deleting a thread
-offers the same for its attached worktrees. Attaching requires an up-to-date T3 Code
+other thread uses the worktree and it is not a registered project root, you can delete
+it at the same time. Deleting a thread offers the same for its attached worktrees. Attaching requires an up-to-date T3 Code
 server.
 
 ## Pin and reorder threads

@@ -118,7 +118,7 @@ const make = Effect.gen(function* () {
             projectId: project.id,
             ...(branch === undefined ? {} : { branch }),
             ...(input.baseBranch === undefined ? {} : { baseBranch: input.baseBranch }),
-            runSetupScript: project.scripts.some((script) => script.runOnWorktreeCreate),
+            runSetupScript: true,
           },
           "agent",
         ).pipe(

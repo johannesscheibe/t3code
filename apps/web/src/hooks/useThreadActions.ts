@@ -30,6 +30,7 @@ import {
   readEnvironmentSupportsSnooze,
   readEnvironmentThreadRefs,
   readProject,
+  readProjects,
   readThreadShell,
   readThreadShells,
 } from "../state/entities";
@@ -350,16 +351,24 @@ export function useThreadActions() {
         deletedIds && deletedIds.size > 0
           ? threads.filter((entry) => entry.id === threadRef.threadId || !deletedIds.has(entry.id))
           : threads;
+      const environmentProjects = readProjects().filter(
+        (project) => project.environmentId === threadRef.environmentId,
+      );
       const orphanedWorktreePath = getOrphanedWorktreePathForThread(
         survivingThreads,
         threadRef.threadId,
+        environmentProjects,
       );
       // Worktrees only this thread uses: its own, and attached ones whose project still exists.
       const worktreeCleanupTargets = [
         ...(orphanedWorktreePath !== null && threadProject !== null
           ? [{ cwd: threadProject.workspaceRoot, path: orphanedWorktreePath }]
           : []),
-        ...getOrphanedAttachedWorktrees(survivingThreads, threadRef.threadId).flatMap((link) => {
+        ...getOrphanedAttachedWorktrees(
+          survivingThreads,
+          threadRef.threadId,
+          environmentProjects,
+        ).flatMap((link) => {
           const project = readProject({
             environmentId: threadRef.environmentId,
             projectId: link.projectId,
