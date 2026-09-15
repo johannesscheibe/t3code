@@ -439,6 +439,44 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("remembers which checkout the files surface browses", () => {
+    const store = useRightPanelStore.getState();
+    store.openFilesCheckout(refA, "/worktrees/api");
+    store.open(refA, "agents");
+    store.open(refA, "files");
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "files",
+      surfaces: [
+        { id: "files", kind: "files", checkoutPath: "/worktrees/api" },
+        { id: "agents", kind: "agents" },
+      ],
+    });
+
+    store.openFilesCheckout(refA, null);
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces,
+    ).toEqual([
+      { id: "files", kind: "files" },
+      { id: "agents", kind: "agents" },
+    ]);
+  });
+
+  it("drops a malformed files checkout during migration", () => {
+    const migrated = migratePersistedRightPanelState({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: "files",
+          surfaces: [{ id: "files", kind: "files", checkoutPath: 42 }],
+        },
+      },
+    });
+    expect(migrated.byThreadKey["env-1:thread-A"]?.surfaces).toEqual([
+      { id: "files", kind: "files" },
+    ]);
+  });
+
   it("replaces the standalone explorer with peer file surfaces", () => {
     useRightPanelStore.getState().open(refA, "files");
     useRightPanelStore.getState().openFile(refA, "src/index.ts");

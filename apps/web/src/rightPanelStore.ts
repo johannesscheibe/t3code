@@ -52,7 +52,12 @@ export type RightPanelSurface =
       splitDirection?: "horizontal" | "vertical";
     }
   | { id: "diff"; kind: "diff" }
-  | { id: "files"; kind: "files" }
+  | {
+      id: "files";
+      kind: "files";
+      /** Attached worktree the tree browses; absent for the thread's own workspace. */
+      checkoutPath?: string;
+    }
   | {
       id: `file:${string}` | `attachment:${string}`;
       kind: "file";
@@ -131,6 +136,8 @@ interface RightPanelStoreState {
     ref: ScopedThreadRef,
     kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request">,
   ) => void;
+  /** Open the Files surface on a checkout: an attached worktree path, or null for the workspace. */
+  openFilesCheckout: (ref: ScopedThreadRef, checkoutPath: string | null) => void;
   openDevice: (ref: ScopedThreadRef, target: DeviceTabTarget, automatic?: boolean) => void;
   renameDevice: (ref: ScopedThreadRef, surfaceId: string, title: string) => void;
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
@@ -400,6 +407,13 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                         }),
                       ];
                     }
+                    if (surface.kind === "files") {
+                      return [
+                        typeof surface.checkoutPath === "string"
+                          ? { id: "files", kind: "files", checkoutPath: surface.checkoutPath }
+                          : { id: "files", kind: "files" },
+                      ];
+                    }
                     if (surface.kind !== "terminal") return [surface];
                     if (
                       !("resourceId" in surface) ||
@@ -513,6 +527,24 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
               return upsertSurface(current, existing ?? browserSurface(null));
             }
             return upsertSurface(current, singletonSurface(kind));
+          }),
+        ),
+      openFilesCheckout: (ref, checkoutPath) =>
+        set((state) =>
+          userAction(state, scopedThreadKey(ref), (current) => {
+            const surface: RightPanelSurface =
+              checkoutPath === null
+                ? { id: "files", kind: "files" }
+                : { id: "files", kind: "files", checkoutPath };
+            const exists = current.surfaces.some((entry) => entry.id === "files");
+            return {
+              ...current,
+              isOpen: true,
+              surfaces: exists
+                ? current.surfaces.map((entry) => (entry.id === "files" ? surface : entry))
+                : [...current.surfaces, surface],
+              activeSurfaceId: "files",
+            };
           }),
         ),
       openDevice: (ref, target, automatic = false) =>

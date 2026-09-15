@@ -23,19 +23,21 @@ worktree**, each background submission creates its own worktree.
 ## Work across repositories
 
 When a task needs changes in another project, attach a worktree of that project to the
-thread. On web and desktop, select the folder button beside the branch in the composer
-and choose a project. T3 Code creates a worktree on a new branch, named after the thread's
-branch by default, or attaches an existing checkout path you enter. Agents can also attach
-one when their work reaches another project.
+thread. On web and desktop, open the checkout selector at the top of the Files panel and
+choose **Attach worktree…**. T3 Code creates a worktree on a new branch, named after the
+thread's branch by default, or attaches an existing checkout path you enter. Agents can also
+attach one when their work reaches another project.
 
 The thread must start in a Git workspace, and an existing checkout must belong to the
 selected project. A thread can have one worktree per project. The agent can write to a
-newly attached worktree from its next message. Checkpoints and revert include attached worktrees. In the
-diff panel, use the selector at the top to switch between repositories. A pull request
-opened from an attached worktree's branch appears on its chip, and on mobile in the
-thread's Git sheet.
+newly attached worktree from its next message. Checkpoints and revert include attached
+worktrees. Once the thread has started, the workspace label in the composer shows how many
+are attached, for example **Worktree +1**; select it to open a checkout in the Files panel.
+In the Files and diff panels, use the selector at the top to switch between repositories.
+With an attached worktree selected in the Files panel, its selector opens the pull request
+for that worktree's branch. On mobile, those pull requests appear in the thread's Git sheet.
 
-To stop working in a repository, open its chip and choose **Detach from thread**. If no
+To stop working in a repository, select it in the Files panel selector and choose **Detach worktree**. If no
 other thread uses the worktree and it is not a registered project root, you can delete
 it at the same time. Deleting a thread offers the same for its attached worktrees. Attaching requires an up-to-date T3 Code
 server.

@@ -7,19 +7,13 @@ import type {
 } from "@t3tools/contracts";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/models";
 import {
-  CopyIcon,
-  FolderGit2Icon,
-  FolderPlusIcon,
-  GitPullRequestIcon,
-  UnlinkIcon,
-} from "lucide-react";
-import {
   isAtomCommandInterrupted,
   settlePromise,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
-import { memo, useMemo, useState } from "react";
+import { normalizeThreadWorktreePath } from "@t3tools/shared/threadWorktrees";
+import { useCallback, useMemo, useState } from "react";
 
 import {
   readEnvironmentThreadRefs,
@@ -33,7 +27,6 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { vcsEnvironment } from "~/state/vcs";
 import { readLocalApi } from "~/localApi";
 import { formatWorktreePathForDisplay, getOrphanedAttachedWorktrees } from "~/worktreeCleanup";
-import { composerFloatingLayerProps } from "./chat/composerEventScope";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -45,7 +38,6 @@ import {
   DialogTitle,
 } from "./ui/dialog";
 import { Input } from "./ui/input";
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
 import { toastManager } from "./ui/toast";
 
@@ -65,25 +57,80 @@ function toastCommandFailure(
   });
 }
 
-interface ThreadWorktreesControlProps {
-  environmentId: EnvironmentId;
-  thread: Pick<OrchestrationThreadShell, "id" | "projectId" | "branch" | "worktrees">;
-}
-
 /**
- * Worktrees of other projects attached to a started thread. Each chip copies
- * its path or detaches it; the trailing button attaches another project.
+ * Detach a worktree from a thread. Detaching leaves the files; when no other
+ * thread uses the worktree, the user is offered the chance to delete it too,
+ * the same way deleting a thread does.
  */
-export const ThreadWorktreesControl = memo(function ThreadWorktreesControl({
-  environmentId,
-  thread,
-}: ThreadWorktreesControlProps) {
-  const supported =
-    useServerConfigs().get(environmentId)?.environment.capabilities.threadWorktrees === true;
+function useWorktreeDetach(
+  environmentId: EnvironmentId,
+  thread: Pick<OrchestrationThreadShell, "id">,
+): (link: ThreadWorktreeLink) => Promise<void> {
   const projects = useProjects();
   const detach = useAtomCommand(threadEnvironment.detachWorktree);
   const removeWorktree = useAtomCommand(vcsEnvironment.removeWorktree);
-  const [dialogOpen, setDialogOpen] = useState(false);
+
+  return useCallback(
+    async (link: ThreadWorktreeLink) => {
+      const environmentProjects = projects.filter(
+        (project) => project.environmentId === environmentId,
+      );
+      const threads = readEnvironmentThreadRefs(environmentId).flatMap((ref) => {
+        const shell = readThreadShell(ref);
+        return shell === null ? [] : [shell];
+      });
+      const orphaned = getOrphanedAttachedWorktrees(threads, thread.id, environmentProjects).some(
+        (entry) => entry.worktreePath === link.worktreePath,
+      );
+      const project = readProject({ environmentId, projectId: link.projectId });
+      const localApi = readLocalApi();
+      let deleteWorktree = false;
+      if (orphaned && project !== null && localApi) {
+        const confirmation = await settlePromise(() =>
+          localApi.dialogs.confirm(
+            [
+              "No other thread uses this worktree:",
+              formatWorktreePathForDisplay(link.worktreePath),
+              "",
+              "Delete the worktree too?",
+            ].join("\n"),
+            { variant: "destructive" },
+          ),
+        );
+        if (confirmation._tag === "Failure") return;
+        deleteWorktree = confirmation.value;
+      }
+      const detached = await detach({
+        environmentId,
+        input: { threadId: thread.id, worktreePath: link.worktreePath },
+      });
+      if (detached._tag === "Failure") {
+        toastCommandFailure("Failed to detach worktree", detached);
+        return;
+      }
+      if (!deleteWorktree || project === null) return;
+      const removed = await removeWorktree({
+        environmentId,
+        input: { cwd: project.workspaceRoot, path: link.worktreePath, force: true },
+      });
+      toastCommandFailure("Worktree detached, but deleting it failed", removed);
+    },
+    [detach, environmentId, projects, removeWorktree, thread.id],
+  );
+}
+
+/**
+ * Everything a checkout menu needs about a started thread: its attached
+ * worktrees, the projects that could still be attached, and the actions on them.
+ */
+export function useThreadCheckouts(
+  environmentId: EnvironmentId,
+  thread: Pick<OrchestrationThreadShell, "id" | "projectId" | "branch" | "worktrees">,
+) {
+  const supported =
+    useServerConfigs().get(environmentId)?.environment.capabilities.threadWorktrees === true;
+  const projects = useProjects();
+  const detach = useWorktreeDetach(environmentId, thread);
   const links = thread.worktrees ?? NO_WORKTREES;
 
   const environmentProjects = useMemo(
@@ -99,131 +146,29 @@ export const ThreadWorktreesControl = memo(function ThreadWorktreesControl({
     [environmentProjects, links, thread.projectId],
   );
 
-  // Detaching leaves the files. When no other thread uses the worktree, offer
-  // to delete it too, the same way deleting a thread does.
-  const detachWorktree = async (link: ThreadWorktreeLink) => {
-    const threads = readEnvironmentThreadRefs(environmentId).flatMap((ref) => {
-      const shell = readThreadShell(ref);
-      return shell === null ? [] : [shell];
-    });
-    const orphaned = getOrphanedAttachedWorktrees(threads, thread.id, environmentProjects).some(
-      (entry) => entry.worktreePath === link.worktreePath,
-    );
-    const project = readProject({ environmentId, projectId: link.projectId });
-    const localApi = readLocalApi();
-    let deleteWorktree = false;
-    if (orphaned && project !== null && localApi) {
-      const confirmation = await settlePromise(() =>
-        localApi.dialogs.confirm(
-          [
-            "No other thread uses this worktree:",
-            formatWorktreePathForDisplay(link.worktreePath),
-            "",
-            "Delete the worktree too?",
-          ].join("\n"),
-          { variant: "destructive" },
-        ),
+  return {
+    supported,
+    links,
+    attachableProjects,
+    detach,
+    projectTitle: (projectId: ProjectId) =>
+      environmentProjects.find((project) => project.id === projectId)?.title ?? projectId,
+    /** An attached checkout that is its project's own root rather than a worktree. */
+    isLocalCheckout: (link: ThreadWorktreeLink) => {
+      const root = environmentProjects.find(
+        (project) => project.id === link.projectId,
+      )?.workspaceRoot;
+      return (
+        root !== undefined &&
+        normalizeThreadWorktreePath(root) === normalizeThreadWorktreePath(link.worktreePath)
       );
-      if (confirmation._tag === "Failure") return;
-      deleteWorktree = confirmation.value;
-    }
-    const detached = await detach({
-      environmentId,
-      input: { threadId: thread.id, worktreePath: link.worktreePath },
-    });
-    if (detached._tag === "Failure") {
-      toastCommandFailure("Failed to detach worktree", detached);
-      return;
-    }
-    if (!deleteWorktree || project === null) return;
-    const removed = await removeWorktree({
-      environmentId,
-      input: { cwd: project.workspaceRoot, path: link.worktreePath, force: true },
-    });
-    toastCommandFailure("Worktree detached, but deleting it failed", removed);
+    },
+    defaultBranch:
+      thread.branch !== null && !isTemporaryWorktreeBranch(thread.branch) ? thread.branch : null,
   };
+}
 
-  if (!supported) {
-    return null;
-  }
-
-  return (
-    <>
-      {links.map((link) => {
-        const title =
-          environmentProjects.find((project) => project.id === link.projectId)?.title ??
-          formatWorktreePathForDisplay(link.worktreePath);
-        return (
-          <Menu key={link.worktreePath}>
-            <MenuTrigger
-              render={<Button variant="ghost" size="xs" />}
-              className="min-w-0 shrink font-normal text-muted-foreground/70 text-xs! hover:text-foreground/80"
-              title={link.worktreePath}
-              data-composer-context-control
-            >
-              <FolderGit2Icon className="size-3 shrink-0" />
-              <span className="min-w-0 max-w-[180px] truncate">
-                {[title, link.branch, link.pullRequest ? `#${link.pullRequest.number}` : null]
-                  .filter(Boolean)
-                  .join(" · ")}
-              </span>
-            </MenuTrigger>
-            <MenuPopup align="start" side="top" {...composerFloatingLayerProps}>
-              {link.pullRequest ? (
-                <MenuItem
-                  onClick={() => {
-                    if (link.pullRequest) {
-                      void readLocalApi()?.shell.openExternal(link.pullRequest.url);
-                    }
-                  }}
-                >
-                  <GitPullRequestIcon className="size-3.5" />
-                  Open pull request #{link.pullRequest.number}
-                </MenuItem>
-              ) : null}
-              <MenuItem onClick={() => void navigator.clipboard.writeText(link.worktreePath)}>
-                <CopyIcon className="size-3.5" />
-                Copy path
-              </MenuItem>
-              <MenuItem onClick={() => void detachWorktree(link)}>
-                <UnlinkIcon className="size-3.5" />
-                Detach from thread
-              </MenuItem>
-            </MenuPopup>
-          </Menu>
-        );
-      })}
-      {attachableProjects.length > 0 ? (
-        <Button
-          variant="ghost"
-          size="xs"
-          className="font-normal text-muted-foreground/70 hover:text-foreground/80"
-          aria-label="Attach worktree"
-          title="Attach a worktree of another project"
-          data-composer-context-control
-          onClick={() => setDialogOpen(true)}
-        >
-          <FolderPlusIcon className="size-3" />
-        </Button>
-      ) : null}
-      {dialogOpen ? (
-        <AttachWorktreeDialog
-          environmentId={environmentId}
-          threadId={thread.id}
-          projects={attachableProjects}
-          defaultBranch={
-            thread.branch !== null && !isTemporaryWorktreeBranch(thread.branch)
-              ? thread.branch
-              : null
-          }
-          onClose={() => setDialogOpen(false)}
-        />
-      ) : null}
-    </>
-  );
-});
-
-function AttachWorktreeDialog({
+export function AttachWorktreeDialog({
   environmentId,
   threadId,
   projects,

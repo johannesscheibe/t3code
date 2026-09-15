@@ -211,6 +211,7 @@ import { RightPanelTabs } from "./RightPanelTabs";
 import { AgentsPanel } from "./AgentsPanel";
 import { LinkPullRequestDialogHost } from "./pullRequest/LinkPullRequestDialog";
 import { ThreadPullRequestsPanel } from "./pullRequest/ThreadPullRequestsPanel";
+import { FileCheckoutSwitcher } from "./files/FileCheckoutSwitcher";
 import { useDeviceState } from "~/state/device";
 import { DeviceSetup } from "./device/DeviceSetup";
 import { Dialog } from "./ui/dialog";
@@ -3518,6 +3519,22 @@ export default function ChatView(props: ChatViewProps) {
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
+  // The checkout the rendered Files surface shows. The tree browses the checkout its
+  // surface remembers. Files from an attached worktree open by absolute path, so a file
+  // surface belongs to the worktree containing it, while relative paths from every other
+  // opener stay on the primary workspace. A stale path (after detaching) finds nothing
+  // and falls back to the primary workspace.
+  const renderedFilesCheckout =
+    (renderedRightPanelSurface?.kind === "file"
+      ? activeThread?.worktrees?.find((link) =>
+          renderedRightPanelSurface.relativePath.startsWith(`${link.worktreePath}/`),
+        )
+      : renderedRightPanelSurface?.kind === "files"
+        ? activeThread?.worktrees?.find(
+            (link) => link.worktreePath === renderedRightPanelSurface.checkoutPath,
+          )
+        : undefined) ?? null;
+  const filesSurfaceCwd = renderedFilesCheckout?.worktreePath ?? activeWorkspaceRoot;
   useLayoutEffect(() => {
     if (
       threadDetailLoading ||
@@ -4454,9 +4471,26 @@ export default function ChatView(props: ChatViewProps) {
   const openFileSurface = useCallback(
     (relativePath: string) => {
       if (!activeThreadRef || !activeProject) return;
-      useRightPanelStore.getState().openFile(activeThreadRef, relativePath);
+      // The tree emits paths relative to the checkout it shows. An attached
+      // worktree is not the primary cwd, so its files open by absolute path.
+      const path = renderedFilesCheckout
+        ? `${renderedFilesCheckout.worktreePath}/${relativePath}`
+        : relativePath;
+      useRightPanelStore.getState().openFile(activeThreadRef, path);
     },
-    [activeProject, activeThreadRef],
+    [activeProject, activeThreadRef, renderedFilesCheckout],
+  );
+  // File surfaces are keyed by the path they were opened with, which is absolute
+  // for an attached worktree while the preview works with a checkout-relative one.
+  const handleCheckoutFilePendingChange = useCallback(
+    (relativePath: string, pending: boolean) =>
+      handleFilePendingChange(
+        renderedFilesCheckout
+          ? `${renderedFilesCheckout.worktreePath}/${relativePath}`
+          : relativePath,
+        pending,
+      ),
+    [handleFilePendingChange, renderedFilesCheckout],
   );
   // The shell carries server PR updates even while thread detail is still loading.
   const activeThreadMetadata = activeThreadShell ?? activeThread;
@@ -8780,19 +8814,23 @@ export default function ChatView(props: ChatViewProps) {
           key={`${activeThread.environmentId}:${
             renderedRightPanelSurface.kind === "file" && renderedRightPanelSurface.attachment
               ? `attachment:${renderedRightPanelSurface.attachment.id}`
-              : activeWorkspaceRoot
+              : filesSurfaceCwd
           }`}
           environmentId={activeThread.environmentId}
-          cwd={activeWorkspaceRoot ?? ""}
+          cwd={filesSurfaceCwd ?? ""}
           projectName={activeProject?.title ?? ""}
           threadRef={activeThreadRef}
           composerDraftTarget={composerDraftTarget}
           keybindings={keybindings}
           availableEditors={availableEditors}
           relativePath={
-            renderedRightPanelSurface.kind === "file"
-              ? renderedRightPanelSurface.relativePath
-              : null
+            renderedRightPanelSurface.kind !== "file"
+              ? null
+              : renderedFilesCheckout
+                ? renderedRightPanelSurface.relativePath.slice(
+                    renderedFilesCheckout.worktreePath.length + 1,
+                  )
+                : renderedRightPanelSurface.relativePath
           }
           {...(renderedRightPanelSurface.kind === "file" && renderedRightPanelSurface.attachment
             ? { attachment: renderedRightPanelSurface.attachment }
@@ -8808,12 +8846,27 @@ export default function ChatView(props: ChatViewProps) {
               : 0
           }
           onOpenFile={openFileSurface}
-          onPendingChange={handleFilePendingChange}
+          onPendingChange={handleCheckoutFilePendingChange}
+          {...(renderedFilesCheckout ? { mentionRoot: renderedFilesCheckout.worktreePath } : {})}
           selectedFilePending={
             renderedRightPanelSurface.kind === "file" &&
             pendingFileSurfaceIds.has(renderedRightPanelSurface.id)
           }
           workspaceMutationId={workspaceMutationId}
+          {...(activeThread && activeProject
+            ? {
+                headerSlot: (
+                  <FileCheckoutSwitcher
+                    environmentId={activeThread.environmentId}
+                    thread={activeThread}
+                    selectedWorktreePath={renderedFilesCheckout?.worktreePath ?? null}
+                    onSelect={(worktreePath) =>
+                      useRightPanelStore.getState().openFilesCheckout(activeThreadRef, worktreePath)
+                    }
+                  />
+                ),
+              }
+            : {})}
         />
       </Suspense>
     ) : null
