@@ -460,6 +460,7 @@ function mapWorktreeRow(row: ProjectionThreadWorktree): ThreadWorktreeLink {
     branch: row.branch,
     source: row.source,
     linkedAt: row.linkedAt,
+    ...(row.checkpointId === null ? {} : { checkpointId: row.checkpointId }),
     ...(row.pullRequest === null ? {} : { pullRequest: row.pullRequest }),
   };
 }
@@ -1396,6 +1397,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           branch,
           source,
           linked_at AS "linkedAt",
+          checkpoint_id AS "checkpointId",
           pull_request_json AS "pullRequest"
         FROM projection_thread_worktrees
         ORDER BY thread_id ASC, linked_at ASC, worktree_path ASC
@@ -1414,6 +1416,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           branch,
           source,
           linked_at AS "linkedAt",
+          checkpoint_id AS "checkpointId",
           pull_request_json AS "pullRequest"
         FROM projection_thread_worktrees
         WHERE thread_id = ${threadId}

@@ -25,6 +25,7 @@ export const ProjectionThreadWorktree = Schema.Struct({
   branch: Schema.NullOr(TrimmedNonEmptyString),
   source: ThreadWorktreeLinkSource,
   linkedAt: IsoDateTime,
+  checkpointId: Schema.NullOr(TrimmedNonEmptyString),
   pullRequest: Schema.NullOr(ThreadWorktreePullRequest),
 });
 export type ProjectionThreadWorktree = typeof ProjectionThreadWorktree.Type;
@@ -87,6 +88,7 @@ export const make = Effect.gen(function* () {
         branch,
         source,
         linked_at,
+        checkpoint_id,
         pull_request_json
       )
       VALUES (
@@ -96,6 +98,7 @@ export const make = Effect.gen(function* () {
         ${row.branch},
         ${row.source},
         ${row.linkedAt},
+        ${row.checkpointId},
         ${row.pullRequest === null ? null : JSON.stringify(row.pullRequest)}
       )
       ON CONFLICT (thread_id, worktree_path)
@@ -104,6 +107,7 @@ export const make = Effect.gen(function* () {
         branch = excluded.branch,
         source = excluded.source,
         linked_at = excluded.linked_at,
+        checkpoint_id = excluded.checkpoint_id,
         pull_request_json = excluded.pull_request_json
     `,
   });
@@ -119,6 +123,7 @@ export const make = Effect.gen(function* () {
         branch,
         source,
         linked_at AS "linkedAt",
+        checkpoint_id AS "checkpointId",
         pull_request_json AS "pullRequest"
       FROM projection_thread_worktrees
       ORDER BY thread_id ASC, linked_at ASC, worktree_path ASC
@@ -136,6 +141,7 @@ export const make = Effect.gen(function* () {
         branch,
         source,
         linked_at AS "linkedAt",
+        checkpoint_id AS "checkpointId",
         pull_request_json AS "pullRequest"
       FROM projection_thread_worktrees
       WHERE thread_id = ${threadId}

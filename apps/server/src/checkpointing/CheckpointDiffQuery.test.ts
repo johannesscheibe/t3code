@@ -475,6 +475,7 @@ describe("CheckpointDiffQuery.layer", () => {
       const projectId = ProjectId.make("project-attached");
       const threadId = ThreadId.make("thread-attached");
       const worktreePath = "/tmp/library-worktree";
+      const checkpointId = "attachment-2";
       const diffCalls: Array<{
         readonly cwd: string;
         readonly fromCheckpointRef: CheckpointRef;
@@ -501,6 +502,7 @@ describe("CheckpointDiffQuery.layer", () => {
             branch: "feature",
             source: "agent",
             linkedAt: "2026-01-01T00:00:00.000Z",
+            checkpointId,
           },
         ],
       } as unknown as OrchestrationThreadShell;
@@ -559,8 +561,18 @@ describe("CheckpointDiffQuery.layer", () => {
       expect(diffCalls).toEqual([
         {
           cwd: worktreePath,
-          fromCheckpointRef: checkpointRefForThreadWorktreeTurn(threadId, worktreePath, 1),
-          toCheckpointRef: checkpointRefForThreadWorktreeTurn(threadId, worktreePath, 2),
+          fromCheckpointRef: checkpointRefForThreadWorktreeTurn(
+            threadId,
+            worktreePath,
+            1,
+            checkpointId,
+          ),
+          toCheckpointRef: checkpointRefForThreadWorktreeTurn(
+            threadId,
+            worktreePath,
+            2,
+            checkpointId,
+          ),
         },
       ]);
       expect(rejected._tag).toBe("CheckpointWorkspacePathMissingError");

@@ -1190,6 +1190,7 @@ const ThreadWorktreeAttachCommand = Schema.Struct({
   projectId: ProjectId,
   branch: Schema.NullOr(TrimmedNonEmptyString),
   source: ThreadWorktreeLinkSource,
+  checkpointId: ThreadWorktreeLink.fields.checkpointId,
 });
 
 const ThreadWorktreeDetachCommand = Schema.Struct({

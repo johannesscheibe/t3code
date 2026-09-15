@@ -1,6 +1,7 @@
 import {
   CommandId,
   type CheckpointRef,
+  type ThreadWorktreeLink,
   EventId,
   MessageId,
   type ProjectId,
@@ -220,47 +221,48 @@ const make = Effect.gen(function* () {
 
   // Attached worktrees that can hold checkpoints. A missing or non-git path is
   // skipped so one broken attachment never blocks the thread's own checkpoints.
-  const resolveAttachedCheckpointPaths = Effect.fn("resolveAttachedCheckpointPaths")(function* (
+  const resolveAttachedCheckpointLinks = Effect.fn("resolveAttachedCheckpointLinks")(function* (
     thread: Parameters<typeof threadWorktrees>[0],
   ) {
     const paths = yield* Effect.forEach(threadWorktrees(thread), (link) =>
       checkpointStore.isGitRepository(link.worktreePath).pipe(
         Effect.orElseSucceed(() => false),
-        Effect.map((isRepository) => (isRepository ? link.worktreePath : null)),
+        Effect.map((isRepository) => (isRepository ? link : null)),
       ),
     );
-    return paths.filter((path): path is string => path !== null);
+    return paths.filter((link) => link !== null);
   });
 
   // Captures each attached worktree's ref for a turn. Baselines keep an
   // existing ref; completions overwrite it like the primary checkpoint does.
   const captureAttachedCheckpoints = Effect.fn("captureAttachedCheckpoints")(function* (input: {
     readonly threadId: ThreadId;
-    readonly paths: ReadonlyArray<string>;
+    readonly links: ReadonlyArray<ThreadWorktreeLink>;
     readonly turnCount: number;
     readonly overwrite: boolean;
   }) {
     yield* Effect.forEach(
-      input.paths,
-      (path) =>
+      input.links,
+      (link) =>
         Effect.gen(function* () {
           const checkpointRef = checkpointRefForThreadWorktreeTurn(
             input.threadId,
-            path,
+            link.worktreePath,
             input.turnCount,
+            link.checkpointId,
           );
           if (
             !input.overwrite &&
-            (yield* checkpointStore.hasCheckpointRef({ cwd: path, checkpointRef }))
+            (yield* checkpointStore.hasCheckpointRef({ cwd: link.worktreePath, checkpointRef }))
           ) {
             return;
           }
-          yield* checkpointStore.captureCheckpoint({ cwd: path, checkpointRef });
+          yield* checkpointStore.captureCheckpoint({ cwd: link.worktreePath, checkpointRef });
         }).pipe(
           Effect.catch((error) =>
             Effect.logWarning("failed to capture attached worktree checkpoint", {
               threadId: input.threadId,
-              worktreePath: path,
+              worktreePath: link.worktreePath,
               detail: error.message,
             }),
           ),
@@ -464,7 +466,7 @@ const make = Effect.gen(function* () {
 
       yield* captureAttachedCheckpoints({
         threadId: thread.id,
-        paths: yield* resolveAttachedCheckpointPaths(thread),
+        links: yield* resolveAttachedCheckpointLinks(thread),
         turnCount: nextTurnCount,
         overwrite: true,
       });
@@ -514,7 +516,7 @@ const make = Effect.gen(function* () {
       const baselineCheckpointRef = checkpointRefForThreadTurn(thread.id, currentTurnCount);
       yield* captureAttachedCheckpoints({
         threadId: thread.id,
-        paths: yield* resolveAttachedCheckpointPaths(thread),
+        links: yield* resolveAttachedCheckpointLinks(thread),
         turnCount: currentTurnCount,
         overwrite: false,
       });
@@ -789,7 +791,7 @@ const make = Effect.gen(function* () {
     const baselineCheckpointRef = checkpointRefForThreadTurn(threadId, currentTurnCount);
     yield* captureAttachedCheckpoints({
       threadId,
-      paths: yield* resolveAttachedCheckpointPaths(thread),
+      links: yield* resolveAttachedCheckpointLinks(thread),
       turnCount: currentTurnCount,
       overwrite: false,
     });
@@ -836,7 +838,7 @@ const make = Effect.gen(function* () {
     );
     yield* captureAttachedCheckpoints({
       threadId: thread.id,
-      paths: [worktreePath],
+      links: [event.payload.link],
       turnCount: currentTurnCount,
       overwrite: false,
     });
@@ -885,7 +887,7 @@ const make = Effect.gen(function* () {
     }
 
     yield* providerService.assertConversationRollbackSupported(event.payload.threadId);
-    const attachedPaths = yield* resolveAttachedCheckpointPaths(thread);
+    const attachedLinks = yield* resolveAttachedCheckpointLinks(thread);
 
     if (event.payload.restoreFiles !== false) {
       if (!checkpointCwd) {
@@ -938,7 +940,8 @@ const make = Effect.gen(function* () {
       // has no ref for it and returns to its first ref instead: its state when
       // the thread attached it. The primary workspace is already restored, so a
       // broken attachment is reported and the revert still completes.
-      for (const path of attachedPaths) {
+      for (const link of attachedLinks) {
+        const path = link.worktreePath;
         const outcome = yield* Effect.gen(function* () {
           for (
             let candidate = event.payload.turnCount;
@@ -949,6 +952,7 @@ const make = Effect.gen(function* () {
               event.payload.threadId,
               path,
               candidate,
+              link.checkpointId,
             );
             if (yield* checkpointStore.hasCheckpointRef({ cwd: path, checkpointRef })) {
               const restored = yield* checkpointStore.restoreCheckpoint({
@@ -1006,7 +1010,8 @@ const make = Effect.gen(function* () {
       });
     }
 
-    for (const path of attachedPaths) {
+    for (const link of attachedLinks) {
+      const path = link.worktreePath;
       const staleAttachedRefs: Array<CheckpointRef> = [];
       for (
         let candidate = event.payload.turnCount + 1;
@@ -1014,7 +1019,12 @@ const make = Effect.gen(function* () {
         candidate += 1
       ) {
         staleAttachedRefs.push(
-          checkpointRefForThreadWorktreeTurn(event.payload.threadId, path, candidate),
+          checkpointRefForThreadWorktreeTurn(
+            event.payload.threadId,
+            path,
+            candidate,
+            link.checkpointId,
+          ),
         );
       }
       if (staleAttachedRefs.length > 0) {

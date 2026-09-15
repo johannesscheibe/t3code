@@ -98,7 +98,7 @@ export const make = Effect.gen(function* () {
       if (link === undefined) {
         return yield* new CheckpointWorkspacePathMissingError({ operation, threadId });
       }
-      return link.worktreePath;
+      return link;
     },
   );
 
@@ -187,10 +187,11 @@ export const make = Effect.gen(function* () {
         });
       }
 
-      const attachedPath =
+      const attachedLink =
         input.worktreePath === undefined
           ? null
           : yield* requireAttachedWorktree(operation, input.threadId, input.worktreePath);
+      const attachedPath = attachedLink?.worktreePath ?? null;
       const diff = yield* checkpointStore
         .diffCheckpoints(
           attachedPath === null
@@ -207,11 +208,13 @@ export const make = Effect.gen(function* () {
                   input.threadId,
                   attachedPath,
                   input.fromTurnCount,
+                  attachedLink?.checkpointId,
                 ),
                 toCheckpointRef: checkpointRefForThreadWorktreeTurn(
                   input.threadId,
                   attachedPath,
                   input.toTurnCount,
+                  attachedLink?.checkpointId,
                 ),
                 fallbackFromToHead: false,
                 ignoreWhitespace,
@@ -299,10 +302,11 @@ export const make = Effect.gen(function* () {
       });
     }
 
-    const attachedPath =
+    const attachedLink =
       input.worktreePath === undefined
         ? null
         : yield* requireAttachedWorktree(operation, input.threadId, input.worktreePath);
+    const attachedPath = attachedLink?.worktreePath ?? null;
     let attachedFromTurnCount: number | null = null;
     if (attachedPath !== null) {
       // A worktree attached partway through the thread starts at its first ref.
@@ -313,6 +317,7 @@ export const make = Effect.gen(function* () {
             input.threadId,
             attachedPath,
             candidate,
+            attachedLink?.checkpointId,
           ),
         });
         if (exists) {
@@ -346,11 +351,13 @@ export const make = Effect.gen(function* () {
                 input.threadId,
                 attachedPath,
                 attachedFromTurnCount,
+                attachedLink?.checkpointId,
               ),
               toCheckpointRef: checkpointRefForThreadWorktreeTurn(
                 input.threadId,
                 attachedPath,
                 input.toTurnCount,
+                attachedLink?.checkpointId,
               ),
               fallbackFromToHead: false,
               ignoreWhitespace,

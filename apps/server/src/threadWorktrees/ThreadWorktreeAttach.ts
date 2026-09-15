@@ -153,8 +153,20 @@ export const make = Effect.gen(function* () {
                 `The checkout does not belong to ${project.title}'s Git repository.`,
               );
             }
+            const canonicalWorktreePath = yield* canonicalPath(
+              requestedPath,
+              repository.repository.rootPath,
+            );
+            const canonicalProjectRoot = yield* canonicalPath(
+              project.workspaceRoot,
+              selected.repository.rootPath,
+            );
+            // Keep the registered spelling for the project workspace. Clients
+            // can recognize it as protected even when it contains symlinks.
             const worktreePath = normalizeThreadWorktreePath(
-              yield* canonicalPath(requestedPath, repository.repository.rootPath),
+              canonicalWorktreePath === canonicalProjectRoot
+                ? project.workspaceRoot
+                : canonicalWorktreePath,
             );
             const status = yield* git
               .status({ cwd: worktreePath })
@@ -214,6 +226,7 @@ export const make = Effect.gen(function* () {
         input.threadId,
         checkout.worktreePath,
         turnCount,
+        uuid,
       );
       if (!(yield* checkpoints.hasCheckpointRef({ cwd: checkout.worktreePath, checkpointRef }))) {
         yield* checkpoints.captureCheckpoint({ cwd: checkout.worktreePath, checkpointRef });
@@ -226,6 +239,7 @@ export const make = Effect.gen(function* () {
         projectId: input.projectId,
         branch: checkout.branch,
         source,
+        checkpointId: uuid,
       });
     }).pipe(
       Effect.mapError(attachFailure("Could not attach the worktree to the thread.")),
@@ -286,6 +300,7 @@ export const make = Effect.gen(function* () {
         branch: checkout.branch,
         source,
         linkedAt: DateTime.formatIso(yield* DateTime.now),
+        checkpointId: uuid,
       },
     } satisfies ThreadWorktreeAttachResult;
   });

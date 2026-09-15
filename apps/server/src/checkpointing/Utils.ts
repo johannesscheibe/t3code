@@ -10,17 +10,21 @@ export function checkpointRefForThreadTurn(threadId: ThreadId, turnCount: number
 }
 
 /**
- * Checkpoint ref for an attached worktree. The path is part of the name so a
- * worktree that shares a repository with the thread's primary workspace, or
- * with another attached worktree, never overwrites their refs.
+ * Checkpoint ref for an attached worktree. The path separates worktrees in one
+ * repository. New links also carry an attachment ID so detach and reattach can
+ * start a fresh baseline without overwriting the earlier attachment's refs.
+ * Legacy links omit the ID and retain their original ref names.
  */
 export function checkpointRefForThreadWorktreeTurn(
   threadId: ThreadId,
   worktreePath: string,
   turnCount: number,
+  checkpointId?: string,
 ): CheckpointRef {
+  const attachment =
+    checkpointId === undefined ? "" : `/attachment/${Encoding.encodeBase64Url(checkpointId)}`;
   return CheckpointRef.make(
-    `${CHECKPOINT_REFS_PREFIX}/${Encoding.encodeBase64Url(threadId)}/worktree/${Encoding.encodeBase64Url(worktreePath)}/turn/${turnCount}`,
+    `${CHECKPOINT_REFS_PREFIX}/${Encoding.encodeBase64Url(threadId)}/worktree/${Encoding.encodeBase64Url(worktreePath)}${attachment}/turn/${turnCount}`,
   );
 }
 

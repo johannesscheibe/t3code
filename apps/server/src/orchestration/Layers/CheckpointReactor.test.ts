@@ -43,6 +43,7 @@ import {
   ProjectSetupScriptRunner,
   type ProjectSetupScriptRunnerInput,
 } from "../../project/ProjectSetupScriptRunner.ts";
+import * as CheckpointDiffQuery from "../../checkpointing/CheckpointDiffQuery.ts";
 import * as CheckpointStore from "../../checkpointing/CheckpointStore.ts";
 import * as VcsDriverRegistry from "../../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../../vcs/VcsProcess.ts";
@@ -568,6 +569,10 @@ describe("CheckpointReactor", () => {
     return {
       engine,
       makeAttach,
+      makeDiffQuery: CheckpointDiffQuery.make.pipe(
+        Effect.provideService(CheckpointStore.CheckpointStore, checkpointStore),
+        Effect.provideService(ProjectionSnapshotQuery, snapshotQuery),
+      ),
       checkpointStore,
       setupCalls,
       removedWorktrees,
@@ -2000,10 +2005,16 @@ describe("CheckpointReactor", () => {
         yield* Deferred.succeed(release, undefined);
         yield* Fiber.join(pending);
       }
+      const { link } = yield* Fiber.join(pending);
       expect(
         gitShowFileAtRef(
           libraryCwd,
-          checkpointRefForThreadWorktreeTurn(ThreadId.make("thread-1"), libraryCwd, 0),
+          checkpointRefForThreadWorktreeTurn(
+            ThreadId.make("thread-1"),
+            libraryCwd,
+            0,
+            link.checkpointId,
+          ),
           "README.md",
         ),
       ).toBe("v1\n");
@@ -2046,6 +2057,82 @@ describe("CheckpointReactor", () => {
         );
         expect(NodeFS.readFileSync(NodePath.join(libraryCwd, "README.md"), "utf8")).toBe("v1\n");
       }),
+  );
+
+  effectIt.effect("reattachment starts a fresh baseline without replacing the old one", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() =>
+        createHarness({ seedFilesystemCheckpoints: false }),
+      );
+      const threadId = ThreadId.make("thread-1");
+      const libraryCwd = createGitRepository();
+      tempDirs.push(libraryCwd);
+      const projectId = yield* Effect.promise(() => harness.registerAttachedProject(libraryCwd));
+      yield* harness.checkpointStore.captureCheckpoint({
+        cwd: harness.cwd,
+        checkpointRef: checkpointRefForThreadTurn(threadId, 1),
+      });
+      yield* harness.engine.dispatch({
+        type: "thread.turn.diff.complete",
+        commandId: CommandId.make("cmd-diff-before-reattach"),
+        threadId,
+        turnId: asTurnId("turn-before-reattach"),
+        completedAt: "2026-01-01T00:00:00.000Z",
+        checkpointRef: checkpointRefForThreadTurn(threadId, 1),
+        status: "ready",
+        files: [],
+        checkpointTurnCount: 1,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      });
+
+      const attach = yield* harness.makeAttach();
+      const first = yield* attach({ threadId, projectId, worktreePath: libraryCwd }, "manual");
+      yield* harness.engine.dispatch({
+        type: "thread.worktree.detach",
+        commandId: CommandId.make("cmd-detach-before-reattach"),
+        threadId,
+        worktreePath: libraryCwd,
+      });
+      NodeFS.writeFileSync(NodePath.join(libraryCwd, "README.md"), "changed while detached\n");
+      const second = yield* attach({ threadId, projectId, worktreePath: libraryCwd }, "manual");
+
+      expect(second.link.checkpointId).not.toBe(first.link.checkpointId);
+      expect(
+        gitShowFileAtRef(
+          libraryCwd,
+          checkpointRefForThreadWorktreeTurn(threadId, libraryCwd, 1, first.link.checkpointId),
+          "README.md",
+        ),
+      ).toBe("v1\n");
+      expect(
+        gitShowFileAtRef(
+          libraryCwd,
+          checkpointRefForThreadWorktreeTurn(threadId, libraryCwd, 1, second.link.checkpointId),
+          "README.md",
+        ),
+      ).toBe("changed while detached\n");
+
+      NodeFS.writeFileSync(NodePath.join(libraryCwd, "README.md"), "changed after reattach\n");
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const events = yield* harness.engine.subscribeDomainEvents;
+          const reverted = yield* Stream.runHead(
+            events.pipe(Stream.filter((event) => event.type === "thread.reverted")),
+          ).pipe(Effect.forkChild);
+          yield* harness.engine.dispatch({
+            type: "thread.checkpoint.revert",
+            commandId: CommandId.make("cmd-revert-after-reattach"),
+            threadId,
+            turnCount: 1,
+            createdAt: "2026-01-01T00:00:00.000Z",
+          });
+          yield* Fiber.join(reverted);
+        }),
+      );
+      expect(NodeFS.readFileSync(NodePath.join(libraryCwd, "README.md"), "utf8")).toBe(
+        "changed while detached\n",
+      );
+    }),
   );
 
   effectIt.effect(
@@ -2092,6 +2179,29 @@ describe("CheckpointReactor", () => {
         expect(NodeFS.existsSync(NodePath.join(libraryCwd, "test-worktree"))).toBe(false);
         expect((yield* Effect.promise(harness.readModel)).threads[0]?.worktrees ?? []).toEqual([]);
       }),
+  );
+
+  effectIt.effect("keeps a symlinked registered project-root path on its attachment", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() => createHarness());
+      const libraryCwd = createGitRepository();
+      const alias = `${libraryCwd}-alias`;
+      tempDirs.push(libraryCwd, alias);
+      NodeFS.symlinkSync(libraryCwd, alias, "junction");
+      const projectId = yield* Effect.promise(() => harness.registerAttachedProject(alias));
+      const attach = yield* harness.makeAttach();
+
+      const result = yield* attach(
+        {
+          threadId: ThreadId.make("thread-1"),
+          projectId,
+          worktreePath: libraryCwd,
+        },
+        "manual",
+      );
+
+      expect(result.link.worktreePath).toBe(alias);
+    }),
   );
 
   effectIt.effect("uses independent setup terminals for consecutive project attachments", () =>
@@ -2162,11 +2272,11 @@ describe("CheckpointReactor", () => {
 
         const projectId = yield* Effect.promise(() => harness.registerAttachedProject(libraryCwd));
         const attach = yield* harness.makeAttach();
-        yield* attach({ threadId, projectId, worktreePath: libraryCwd }, "agent");
+        const { link } = yield* attach({ threadId, projectId, worktreePath: libraryCwd }, "agent");
         expect(
           gitShowFileAtRef(
             libraryCwd,
-            checkpointRefForThreadWorktreeTurn(threadId, libraryCwd, 1),
+            checkpointRefForThreadWorktreeTurn(threadId, libraryCwd, 1, link.checkpointId),
             "README.md",
           ),
         ).toBe("v1\n");
@@ -2205,7 +2315,10 @@ describe("CheckpointReactor", () => {
         expect(NodeFS.readFileSync(NodePath.join(harness.cwd, "README.md"), "utf8")).toBe("v1\n");
         expect(NodeFS.readFileSync(NodePath.join(libraryCwd, "README.md"), "utf8")).toBe("v1\n");
         expect(
-          gitRefExists(libraryCwd, checkpointRefForThreadWorktreeTurn(threadId, libraryCwd, 1)),
+          gitRefExists(
+            libraryCwd,
+            checkpointRefForThreadWorktreeTurn(threadId, libraryCwd, 1, link.checkpointId),
+          ),
         ).toBe(false);
       }),
   );

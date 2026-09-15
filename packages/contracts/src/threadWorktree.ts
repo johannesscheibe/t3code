@@ -41,6 +41,8 @@ export const ThreadWorktreeLink = Schema.Struct({
   branch: Schema.NullOr(TrimmedNonEmptyString),
   source: ThreadWorktreeLinkSource,
   linkedAt: IsoDateTime,
+  // Absent on legacy links, which retain their original path-based checkpoint refs.
+  checkpointId: Schema.optional(TrimmedNonEmptyString),
   // Maintained by the server like a thread's branch pull request. Optional so
   // links recorded before detection still decode.
   pullRequest: Schema.optional(Schema.NullOr(ThreadWorktreePullRequest)),

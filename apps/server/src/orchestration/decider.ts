@@ -1176,6 +1176,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             branch: command.branch,
             source: command.source,
             linkedAt: occurredAt,
+            ...(command.checkpointId === undefined ? {} : { checkpointId: command.checkpointId }),
           },
           updatedAt: occurredAt,
         },
