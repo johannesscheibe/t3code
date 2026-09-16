@@ -8,23 +8,23 @@ import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
-layer("052_ProjectionThreadWorktrees", (it) => {
-  it.effect("creates the worktree link table keyed by thread and path", () =>
+layer("055_ProjectionThreadCheckouts", (it) => {
+  it.effect("keys checkouts by thread and project, with a nullable worktree path", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 52 });
+      yield* runMigrations({ toMigrationInclusive: 55 });
 
       yield* sql`
-        INSERT INTO projection_thread_worktrees
-          (thread_id, worktree_path, project_id, branch, source, linked_at)
+        INSERT INTO projection_thread_checkouts
+          (thread_id, project_id, worktree_path, branch, source, attached_at, checkpoint_id)
         VALUES
-          ('thread-1', '/tmp/lib-wt', 'project-lib', 'feat/x', 'agent', '2026-03-01T00:00:00.000Z')
+          ('thread-1', 'project-lib', NULL, 'main', 'agent', '2026-03-01T00:00:00.000Z', 'c-1')
       `;
       const duplicate = yield* sql`
-        INSERT INTO projection_thread_worktrees
-          (thread_id, worktree_path, project_id, branch, source, linked_at)
+        INSERT INTO projection_thread_checkouts
+          (thread_id, project_id, worktree_path, branch, source, attached_at, checkpoint_id)
         VALUES
-          ('thread-1', '/tmp/lib-wt', 'project-lib', 'feat/y', 'manual', '2026-03-02T00:00:00.000Z')
+          ('thread-1', 'project-lib', '/tmp/lib-wt', 'feat/y', 'manual', '2026-03-02T00:00:00.000Z', 'c-2')
       `.pipe(
         Effect.as("inserted"),
         Effect.orElseSucceed(() => "rejected"),
@@ -32,7 +32,7 @@ layer("052_ProjectionThreadWorktrees", (it) => {
       assert.strictEqual(duplicate, "rejected");
 
       const rows = yield* sql<{ readonly count: number }>`
-        SELECT COUNT(*) AS count FROM projection_thread_worktrees
+        SELECT COUNT(*) AS count FROM projection_thread_checkouts
       `;
       assert.strictEqual(rows[0]?.count, 1);
     }),

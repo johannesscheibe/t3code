@@ -4,7 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
 import {
   formatWorktreePathForDisplay,
-  getOrphanedAttachedWorktrees,
+  getOrphanedCheckoutWorktrees,
   getOrphanedWorktreePathForThread,
 } from "./worktreeCleanup";
 
@@ -26,6 +26,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     messages: [],
     checkpoints: [],
     pullRequests: [],
+    checkouts: [],
     activities: [],
     proposedPlans: [],
     createdAt: "2026-02-13T00:00:00.000Z",
@@ -90,23 +91,25 @@ describe("getOrphanedWorktreePathForThread", () => {
   });
 });
 
-function attachedWorktree(worktreePath: string) {
+function checkout(projectId: string, worktreePath: string | null): Thread["checkouts"][number] {
   return {
+    projectId: ProjectId.make(projectId),
     worktreePath,
-    projectId: ProjectId.make("project-library"),
     branch: null,
-    source: "manual" as const,
-    linkedAt: "2026-02-13T00:00:00.000Z",
+    pullRequest: null,
+    source: "manual",
+    attachedAt: "2026-02-13T00:00:00.000Z",
+    checkpointId: `checkpoint-${projectId}`,
   };
 }
 
-describe("attached worktree cleanup", () => {
+describe("attached checkout cleanup", () => {
   it("keeps a thread's own worktree when another thread has it attached", () => {
     const threads = [
       makeThread({ id: ThreadId.make("thread-1"), worktreePath: "/tmp/repo/worktrees/feature-a" }),
       makeThread({
         id: ThreadId.make("thread-2"),
-        worktrees: [attachedWorktree("/tmp/repo/worktrees/feature-a/")],
+        checkouts: [checkout("project-1", "/tmp/repo/worktrees/feature-a")],
       }),
     ];
 
@@ -114,18 +117,18 @@ describe("attached worktree cleanup", () => {
   });
 
   it.each([false, true])(
-    "preserves registered project roots, with a local thread: %s",
+    "never offers a registered project root, with a local thread there: %s",
     (hasLocalThread) => {
       const root = "/tmp/library";
       const projects = [{ id: ProjectId.make("project-library"), workspaceRoot: `${root}/` }];
       const threads = [
-        makeThread({ worktreePath: root, worktrees: [attachedWorktree(root)] }),
+        makeThread({ worktreePath: root, checkouts: [checkout("project-other", root)] }),
         ...(hasLocalThread
           ? [makeThread({ id: ThreadId.make("local"), projectId: projects[0]!.id })]
           : []),
       ];
       expect(getOrphanedWorktreePathForThread(threads, threads[0]!.id, projects)).toBeNull();
-      expect(getOrphanedAttachedWorktrees(threads, threads[0]!.id, projects)).toEqual([]);
+      expect(getOrphanedCheckoutWorktrees(threads, threads[0]!.id, projects)).toEqual([]);
     },
   );
 
@@ -133,24 +136,25 @@ describe("attached worktree cleanup", () => {
     const threads = [
       makeThread({
         id: ThreadId.make("thread-1"),
-        worktrees: [
-          attachedWorktree("/tmp/library-a"),
-          attachedWorktree("/tmp/library-b"),
-          attachedWorktree("/tmp/library-c"),
+        checkouts: [
+          checkout("library-local", null),
+          checkout("library-a", "/tmp/library-a"),
+          checkout("library-b", "/tmp/library-b"),
+          checkout("library-c", "/tmp/library-c"),
         ],
       }),
       makeThread({ id: ThreadId.make("thread-2"), worktreePath: "/tmp/library-b" }),
       makeThread({
         id: ThreadId.make("thread-3"),
-        worktrees: [attachedWorktree("/tmp/library-c/")],
+        checkouts: [checkout("library-c", "/tmp/library-c")],
       }),
     ];
 
     expect(
-      getOrphanedAttachedWorktrees(threads, ThreadId.make("thread-1"), []).map(
-        (link) => link.worktreePath,
+      getOrphanedCheckoutWorktrees(threads, ThreadId.make("thread-1"), []).map(
+        (entry) => entry.projectId,
       ),
-    ).toEqual(["/tmp/library-a"]);
+    ).toEqual([ProjectId.make("library-a")]);
   });
 });
 

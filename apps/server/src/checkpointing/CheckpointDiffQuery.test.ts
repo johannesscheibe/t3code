@@ -12,7 +12,7 @@ import * as Option from "effect/Option";
 import { describe, expect } from "vite-plus/test";
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { checkpointRefForThreadTurn, checkpointRefForThreadWorktreeTurn } from "./Utils.ts";
+import { checkpointRefForThreadCheckoutTurn, checkpointRefForThreadTurn } from "./Utils.ts";
 import * as CheckpointDiffQuery from "./CheckpointDiffQuery.ts";
 import * as CheckpointStore from "./CheckpointStore.ts";
 import { CheckpointThreadNotFoundError } from "./Errors.ts";
@@ -470,12 +470,12 @@ describe("CheckpointDiffQuery.layer", () => {
     }),
   );
 
-  it.effect("diffs an attached worktree from its own refs and rejects other paths", () =>
+  it.effect("diffs attached checkouts from their own refs in their own directories", () =>
     Effect.gen(function* () {
       const projectId = ProjectId.make("project-attached");
       const threadId = ThreadId.make("thread-attached");
-      const worktreePath = "/tmp/library-worktree";
-      const checkpointId = "attachment-2";
+      const libraryProjectId = ProjectId.make("project-library");
+      const docsProjectId = ProjectId.make("project-docs");
       const diffCalls: Array<{
         readonly cwd: string;
         readonly fromCheckpointRef: CheckpointRef;
@@ -489,23 +489,38 @@ describe("CheckpointDiffQuery.layer", () => {
         diffCheckpoints: ({ cwd, fromCheckpointRef, toCheckpointRef }) =>
           Effect.sync(() => {
             diffCalls.push({ cwd, fromCheckpointRef, toCheckpointRef });
-            return "attached diff patch";
+            return `diff of ${cwd}`;
           }),
         deleteCheckpointRefs: () => Effect.void,
       };
-      // Only the attached worktree list matters to the diff query.
+      const checkout = {
+        branch: "feature",
+        pullRequest: null,
+        source: "agent" as const,
+        attachedAt: "2026-01-01T00:00:00.000Z",
+      };
+      // Only the attached checkouts matter to the diff query.
       const threadShell = {
-        worktrees: [
+        checkouts: [
           {
-            worktreePath,
-            projectId: ProjectId.make("project-library"),
-            branch: "feature",
-            source: "agent",
-            linkedAt: "2026-01-01T00:00:00.000Z",
-            checkpointId,
+            ...checkout,
+            projectId: libraryProjectId,
+            worktreePath: "/tmp/library-worktree",
+            checkpointId: "library-attachment",
+          },
+          // A local checkout lives in its project's own root.
+          {
+            ...checkout,
+            projectId: docsProjectId,
+            worktreePath: null,
+            checkpointId: "docs-attachment",
           },
         ],
       } as unknown as OrchestrationThreadShell;
+      const projectRoots = new Map([
+        [libraryProjectId, "/tmp/library"],
+        [docsProjectId, "/tmp/docs"],
+      ]);
 
       const layer = CheckpointDiffQuery.layer.pipe(
         Layer.provideMerge(Layer.succeed(CheckpointStore.CheckpointStore, checkpointStore)),
@@ -534,45 +549,47 @@ describe("CheckpointDiffQuery.layer", () => {
                 }),
               ),
             getThreadShellById: () => Effect.succeed(Option.some(threadShell)),
+            getProjectShellById: (id) =>
+              Effect.succeed(
+                Option.fromNullishOr(projectRoots.get(id)).pipe(
+                  Option.map((workspaceRoot) => ({
+                    id,
+                    title: id,
+                    workspaceRoot,
+                    defaultModelSelection: null,
+                    scripts: [],
+                    createdAt: "2026-01-01T00:00:00.000Z",
+                    updatedAt: "2026-01-01T00:00:00.000Z",
+                  })),
+                ),
+              ),
           }),
         ),
       );
 
-      const { attached, rejected } = yield* Effect.gen(function* () {
+      const { library, docs, rejected } = yield* Effect.gen(function* () {
         const query = yield* CheckpointDiffQuery.CheckpointDiffQuery;
-        const attached = yield* query.getTurnDiff({
-          threadId,
-          fromTurnCount: 1,
-          toTurnCount: 2,
-          worktreePath: `${worktreePath}/`,
-        });
+        const range = { threadId, fromTurnCount: 1, toTurnCount: 2 };
+        const library = yield* query.getTurnDiff({ ...range, checkoutProjectId: libraryProjectId });
+        const docs = yield* query.getTurnDiff({ ...range, checkoutProjectId: docsProjectId });
         const rejected = yield* query
-          .getTurnDiff({
-            threadId,
-            fromTurnCount: 1,
-            toTurnCount: 2,
-            worktreePath: "/tmp/somewhere-else",
-          })
+          .getTurnDiff({ ...range, checkoutProjectId: ProjectId.make("project-unattached") })
           .pipe(Effect.flip);
-        return { attached, rejected };
+        return { library, docs, rejected };
       }).pipe(Effect.provide(layer));
 
-      expect(attached.diff).toBe("attached diff patch");
+      expect(library.diff).toBe("diff of /tmp/library-worktree");
+      expect(docs.diff).toBe("diff of /tmp/docs");
       expect(diffCalls).toEqual([
         {
-          cwd: worktreePath,
-          fromCheckpointRef: checkpointRefForThreadWorktreeTurn(
-            threadId,
-            worktreePath,
-            1,
-            checkpointId,
-          ),
-          toCheckpointRef: checkpointRefForThreadWorktreeTurn(
-            threadId,
-            worktreePath,
-            2,
-            checkpointId,
-          ),
+          cwd: "/tmp/library-worktree",
+          fromCheckpointRef: checkpointRefForThreadCheckoutTurn(threadId, "library-attachment", 1),
+          toCheckpointRef: checkpointRefForThreadCheckoutTurn(threadId, "library-attachment", 2),
+        },
+        {
+          cwd: "/tmp/docs",
+          fromCheckpointRef: checkpointRefForThreadCheckoutTurn(threadId, "docs-attachment", 1),
+          toCheckpointRef: checkpointRefForThreadCheckoutTurn(threadId, "docs-attachment", 2),
         },
       ]);
       expect(rejected._tag).toBe("CheckpointWorkspacePathMissingError");

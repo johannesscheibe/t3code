@@ -14,7 +14,6 @@ import type {
   TurnId,
 } from "@t3tools/contracts";
 import { threadPullRequestKeysEqual } from "@t3tools/shared/threadPullRequests";
-import { threadWorktreeKeysEqual, threadWorktrees } from "@t3tools/shared/threadWorktrees";
 import { isImportedAgentSessionMessageId } from "@t3tools/contracts";
 import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
 
@@ -136,6 +135,7 @@ export function applyThreadDetailEvent(
           snoozedAt: null,
           deletedAt: null,
           pullRequests: [],
+          checkouts: [],
           messages: [],
           proposedPlans: [],
           activities: [],
@@ -297,31 +297,29 @@ export function applyThreadDetailEvent(
         event.payload.updatedAt,
       );
 
-    case "thread.worktree-attached": {
-      const link = event.payload.link;
+    case "thread.checkout-attached": {
+      const checkout = event.payload.checkout;
       return {
         kind: "updated",
         thread: {
           ...thread,
-          worktrees: threadWorktrees(thread).some((existing) =>
-            threadWorktreeKeysEqual(existing, link),
-          )
-            ? threadWorktrees(thread).map((existing) =>
-                threadWorktreeKeysEqual(existing, link) ? link : existing,
+          checkouts: thread.checkouts.some((existing) => existing.projectId === checkout.projectId)
+            ? thread.checkouts.map((existing) =>
+                existing.projectId === checkout.projectId ? checkout : existing,
               )
-            : [...threadWorktrees(thread), link],
+            : [...thread.checkouts, checkout],
           updatedAt: event.payload.updatedAt,
         },
       };
     }
 
-    case "thread.worktree-detached":
+    case "thread.checkout-detached":
       return {
         kind: "updated",
         thread: {
           ...thread,
-          worktrees: threadWorktrees(thread).filter(
-            (existing) => !threadWorktreeKeysEqual(existing, event.payload),
+          checkouts: thread.checkouts.filter(
+            (existing) => existing.projectId !== event.payload.projectId,
           ),
           updatedAt: event.payload.updatedAt,
         },

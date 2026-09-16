@@ -46,7 +46,7 @@ export type ReorderActiveThreadInput = CommandInput<"thread.active.reorder">;
 export type UpdateThreadMetadataInput = CommandInput<"thread.meta.update">;
 export type LinkThreadPullRequestInput = CommandInput<"thread.pull-request.link">;
 export type UnlinkThreadPullRequestInput = CommandInput<"thread.pull-request.unlink">;
-export type DetachThreadWorktreeInput = CommandInput<"thread.worktree.detach">;
+export type DetachThreadCheckoutInput = CommandInput<"thread.checkout.detach">;
 export type SetThreadRuntimeModeInput = CommandInput<"thread.runtime-mode.set">;
 export type SetThreadInteractionModeInput = CommandInput<"thread.interaction-mode.set">;
 export type StartThreadTurnInput = CommandInput<"thread.turn.start">;
@@ -275,12 +275,12 @@ export const unlinkThreadPullRequest: (input: UnlinkThreadPullRequestInput) => C
     });
   });
 
-export const detachThreadWorktree: (input: DetachThreadWorktreeInput) => CommandEffect = Effect.fn(
-  "EnvironmentCommands.detachThreadWorktree",
+export const detachThreadCheckout: (input: DetachThreadCheckoutInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.detachThreadCheckout",
 )(function* (input) {
   return yield* dispatch({
     ...input,
-    type: "thread.worktree.detach",
+    type: "thread.checkout.detach",
     commandId: yield* commandId(input),
   });
 });

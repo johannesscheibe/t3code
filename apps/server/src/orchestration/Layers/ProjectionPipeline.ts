@@ -37,7 +37,7 @@ import {
   ProjectionThreadProposedPlanRepository,
 } from "../../persistence/Services/ProjectionThreadProposedPlans.ts";
 import * as ProjectionThreadPullRequests from "../../persistence/ProjectionThreadPullRequests.ts";
-import * as ProjectionThreadWorktrees from "../../persistence/ProjectionThreadWorktrees.ts";
+import * as ProjectionThreadCheckouts from "../../persistence/ProjectionThreadCheckouts.ts";
 import { ProjectionThreadSessionRepository } from "../../persistence/Services/ProjectionThreadSessions.ts";
 import {
   type ProjectionTurn,
@@ -488,8 +488,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const projectionThreadProposedPlanRepository = yield* ProjectionThreadProposedPlanRepository;
     const projectionThreadPullRequestRepository =
       yield* ProjectionThreadPullRequests.ProjectionThreadPullRequestRepository;
-    const projectionThreadWorktreeRepository =
-      yield* ProjectionThreadWorktrees.ProjectionThreadWorktreeRepository;
+    const projectionThreadCheckoutRepository =
+      yield* ProjectionThreadCheckouts.ProjectionThreadCheckoutRepository;
     const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
     const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
     const projectionTurnRepository = yield* ProjectionTurnRepository;
@@ -613,7 +613,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionThreadPullRequestRepository.deleteByThreadId({
             threadId: event.payload.threadId,
           });
-          yield* projectionThreadWorktreeRepository.deleteByThreadId({
+          yield* projectionThreadCheckoutRepository.deleteByThreadId({
             threadId: event.payload.threadId,
           });
           yield* projectionThreadRepository.upsert({
@@ -907,18 +907,16 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
 
-        case "thread.worktree-attached": {
+        case "thread.checkout-attached": {
           const existingRow = yield* projectionThreadRepository.getById({
             threadId: event.payload.threadId,
           });
           if (Option.isNone(existingRow)) {
             return;
           }
-          yield* projectionThreadWorktreeRepository.upsert({
+          yield* projectionThreadCheckoutRepository.upsert({
             threadId: event.payload.threadId,
-            ...event.payload.link,
-            checkpointId: event.payload.link.checkpointId ?? null,
-            pullRequest: event.payload.link.pullRequest ?? null,
+            ...event.payload.checkout,
           });
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
@@ -927,16 +925,16 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
 
-        case "thread.worktree-detached": {
+        case "thread.checkout-detached": {
           const existingRow = yield* projectionThreadRepository.getById({
             threadId: event.payload.threadId,
           });
           if (Option.isNone(existingRow)) {
             return;
           }
-          yield* projectionThreadWorktreeRepository.delete({
+          yield* projectionThreadCheckoutRepository.delete({
             threadId: event.payload.threadId,
-            worktreePath: event.payload.worktreePath,
+            projectId: event.payload.projectId,
           });
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
@@ -1021,7 +1019,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionThreadPullRequestRepository.deleteByThreadId({
             threadId: event.payload.threadId,
           });
-          yield* projectionThreadWorktreeRepository.deleteByThreadId({
+          yield* projectionThreadCheckoutRepository.deleteByThreadId({
             threadId: event.payload.threadId,
           });
           const existingRow = yield* projectionThreadRepository.getById({
@@ -2231,7 +2229,7 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
   Layer.provideMerge(ProjectionThreadMessageRepositoryLive),
   Layer.provideMerge(ProjectionThreadProposedPlanRepositoryLive),
   Layer.provideMerge(ProjectionThreadPullRequests.layer),
-  Layer.provideMerge(ProjectionThreadWorktrees.layer),
+  Layer.provideMerge(ProjectionThreadCheckouts.layer),
   Layer.provideMerge(ProjectionThreadActivityRepositoryLive),
   Layer.provideMerge(ProjectionThreadSessionRepositoryLive),
   Layer.provideMerge(ProjectionTurnRepositoryLive),

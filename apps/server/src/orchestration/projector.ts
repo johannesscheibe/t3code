@@ -19,7 +19,6 @@ import {
   legacyThreadPullRequestKey,
   threadPullRequestKeysEqual,
 } from "@t3tools/shared/threadPullRequests";
-import { threadWorktreeKeysEqual, threadWorktrees } from "@t3tools/shared/threadWorktrees";
 import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -45,8 +44,8 @@ import {
   ThreadPullRequestLinkedPayload,
   ThreadPullRequestSyncedPayload,
   ThreadPullRequestUnlinkedPayload,
-  ThreadWorktreeAttachedPayload,
-  ThreadWorktreeDetachedPayload,
+  ThreadCheckoutAttachedPayload,
+  ThreadCheckoutDetachedPayload,
   ThreadSnoozedPayload,
   ThreadUnpinnedPayload,
   ThreadUnarchivedPayload,
@@ -683,9 +682,9 @@ export function projectEvent(
         }),
       );
 
-    case "thread.worktree-attached":
+    case "thread.checkout-attached":
       return decodeForEvent(
-        ThreadWorktreeAttachedPayload,
+        ThreadCheckoutAttachedPayload,
         event.payload,
         event.type,
         "payload",
@@ -695,26 +694,26 @@ export function projectEvent(
           if (!thread) {
             return nextBase;
           }
-          const links = threadWorktrees(thread);
-          const known = links.some((link) => threadWorktreeKeysEqual(link, payload.link));
+          const { checkout } = payload;
+          const known = thread.checkouts.some((entry) => entry.projectId === checkout.projectId);
           return {
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
-              // A sync replaces its link in place so attached worktrees keep their order.
-              worktrees: known
-                ? links.map((link) =>
-                    threadWorktreeKeysEqual(link, payload.link) ? payload.link : link,
+              // A sync replaces its checkout in place so attached checkouts keep their order.
+              checkouts: known
+                ? thread.checkouts.map((entry) =>
+                    entry.projectId === checkout.projectId ? checkout : entry,
                   )
-                : [...links, payload.link],
+                : [...thread.checkouts, checkout],
               updatedAt: payload.updatedAt,
             }),
           };
         }),
       );
 
-    case "thread.worktree-detached":
+    case "thread.checkout-detached":
       return decodeForEvent(
-        ThreadWorktreeDetachedPayload,
+        ThreadCheckoutDetachedPayload,
         event.payload,
         event.type,
         "payload",
@@ -727,9 +726,7 @@ export function projectEvent(
           return {
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
-              worktrees: threadWorktrees(thread).filter(
-                (link) => !threadWorktreeKeysEqual(link, payload),
-              ),
+              checkouts: thread.checkouts.filter((entry) => entry.projectId !== payload.projectId),
               updatedAt: payload.updatedAt,
             }),
           };

@@ -6,7 +6,7 @@ import {
   type OrchestrationCommand,
   type OrchestrationProjectShell,
   type OrchestrationThreadShell,
-  type ThreadWorktreeLink,
+  type ThreadCheckout,
   type VcsCreateWorktreeInput,
   type VcsCreateWorktreeResult,
   type VcsStatusResult,
@@ -36,8 +36,8 @@ import {
   type ProjectSetupScriptRunnerInput,
 } from "../../../project/ProjectSetupScriptRunner.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
-import { listThreadWorktrees, WorktreesToolkitHandlersLive } from "./handlers.ts";
-import { WorktreesToolkit } from "./tools.ts";
+import { CheckoutsToolkitHandlersLive, listThreadCheckouts } from "./handlers.ts";
+import { CheckoutsToolkit } from "./tools.ts";
 
 const NOW = "2026-08-01T00:00:00.000Z";
 const THREAD_ID = ThreadId.make("thread-1");
@@ -78,7 +78,20 @@ function makeProject(
 
 const PROJECTS = [makeProject(APP, "App", "/code/app"), makeProject(LIB, "Lib", "/code/lib")];
 
-function makeThread(worktrees: ReadonlyArray<ThreadWorktreeLink> = []): OrchestrationThreadShell {
+function makeCheckout(overrides: Partial<ThreadCheckout> = {}): ThreadCheckout {
+  return {
+    projectId: LIB,
+    worktreePath: "/worktrees/lib",
+    branch: "feat/shared-change",
+    pullRequest: null,
+    source: "manual",
+    attachedAt: NOW,
+    checkpointId: "checkpoint-lib",
+    ...overrides,
+  };
+}
+
+function makeThread(overrides: Partial<OrchestrationThreadShell> = {}): OrchestrationThreadShell {
   return {
     id: THREAD_ID,
     projectId: APP,
@@ -89,7 +102,7 @@ function makeThread(worktrees: ReadonlyArray<ThreadWorktreeLink> = []): Orchestr
     branch: "feat/shared-change",
     worktreePath: "/code/app-wt",
     pullRequests: [],
-    worktrees,
+    checkouts: [],
     latestTurn: null,
     createdAt: NOW,
     updatedAt: NOW,
@@ -101,6 +114,7 @@ function makeThread(worktrees: ReadonlyArray<ThreadWorktreeLink> = []): Orchestr
     hasPendingApprovals: false,
     hasPendingUserInput: false,
     hasActionableProposedPlan: false,
+    ...overrides,
   };
 }
 
@@ -109,7 +123,7 @@ interface HarnessOptions {
   readonly projects?: ReadonlyArray<OrchestrationProjectShell>;
 }
 
-const makeHarness = Effect.fn("makeWorktreesToolkitHarness")(function* (
+const makeHarness = Effect.fn("makeCheckoutsToolkitHarness")(function* (
   options: HarnessOptions = {},
 ) {
   const commands = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
@@ -120,8 +134,8 @@ const makeHarness = Effect.fn("makeWorktreesToolkitHarness")(function* (
   const dispatch: OrchestrationEngineShape["dispatch"] = (command) =>
     Effect.gen(function* () {
       if (
-        command.type === "thread.worktree.detach" &&
-        !(thread.worktrees ?? []).some((link) => link.worktreePath === command.worktreePath)
+        command.type === "thread.checkout.detach" &&
+        !thread.checkouts.some((checkout) => checkout.projectId === command.projectId)
       ) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -177,23 +191,23 @@ const makeHarness = Effect.fn("makeWorktreesToolkitHarness")(function* (
       captureCheckpoint: () => Effect.void,
     }),
     Layer.mock(VcsDriverRegistry)({}),
-    FileSystem.layerNoop({}),
+    FileSystem.layerNoop({ realPath: (path) => Effect.succeed(path) }),
     Path.layer,
     Layer.succeed(Crypto.Crypto, testCrypto),
   );
-  const toolkit = yield* WorktreesToolkit.pipe(
-    Effect.provide(WorktreesToolkitHandlersLive.pipe(Layer.provide(dependencies))),
+  const toolkit = yield* CheckoutsToolkit.pipe(
+    Effect.provide(CheckoutsToolkitHandlersLive.pipe(Layer.provide(dependencies))),
   );
-  const call = <Name extends keyof typeof WorktreesToolkit.tools>(
+  const call = <Name extends keyof typeof CheckoutsToolkit.tools>(
     name: Name,
     params: Parameters<typeof toolkit.handle<Name>>[1],
-    capabilities: ReadonlyArray<McpInvocationContext.McpCapability> = ["worktrees"],
+    capabilities: ReadonlyArray<McpInvocationContext.McpCapability> = ["checkouts"],
   ) =>
     toolkit.handle(name, params).pipe(
       Stream.unwrap,
       Stream.runCollect,
       Effect.map(
-        (chunk) => chunk.at(-1)!.result as Tool.Success<(typeof WorktreesToolkit.tools)[Name]>,
+        (chunk) => chunk.at(-1)!.result as Tool.Success<(typeof CheckoutsToolkit.tools)[Name]>,
       ),
       Effect.provideService(McpInvocationContext.McpInvocationContext, invocation(capabilities)),
       Effect.provide(dependencies),
@@ -201,27 +215,28 @@ const makeHarness = Effect.fn("makeWorktreesToolkitHarness")(function* (
   return { commands, createdWorktrees, setupCalls, call };
 });
 
-describe("worktrees toolkit handlers", () => {
-  it.effect("refuses a credential without the worktrees capability", () =>
+describe("checkouts toolkit handlers", () => {
+  it.effect("refuses a credential without the checkouts capability", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();
       const error = yield* harness
-        .call("list_thread_worktrees", {}, ["pull-requests"])
+        .call("list_thread_checkouts", {}, ["pull-requests"])
         .pipe(Effect.flip);
       expect(error).toMatchObject({
         _tag: "McpCapabilityUnavailableError",
-        capability: "worktrees",
+        capability: "checkouts",
       });
     }),
   );
 
-  it.effect("creates a worktree of a project named by title on the thread's branch", () =>
+  it.effect("creates a worktree on the thread's branch for a worktree thread", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();
-      const result = yield* harness.call("attach_worktree", { project: "lib" });
+      const result = yield* harness.call("attach_checkout", { project: "lib" });
       expect(result).toEqual({
         project: "Lib",
-        worktreePath: "/worktrees/lib",
+        path: "/worktrees/lib",
+        mode: "worktree",
         branch: "feat/shared-change",
         alreadyAttached: false,
       });
@@ -238,7 +253,7 @@ describe("worktrees toolkit handlers", () => {
       ]);
       expect(yield* Ref.get(harness.commands)).toMatchObject([
         {
-          type: "thread.worktree.attach",
+          type: "thread.checkout.attach",
           threadId: THREAD_ID,
           projectId: LIB,
           worktreePath: "/worktrees/lib",
@@ -248,13 +263,55 @@ describe("worktrees toolkit handlers", () => {
     }),
   );
 
+  it.effect("attaches the project's own checkout for a local thread", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ thread: makeThread({ worktreePath: null }) });
+      const result = yield* harness.call("attach_checkout", { project: "Lib" });
+      expect(result).toEqual({
+        project: "Lib",
+        path: "/code/lib",
+        mode: "local",
+        branch: "main",
+        alreadyAttached: false,
+      });
+      expect(yield* Ref.get(harness.createdWorktrees)).toEqual([]);
+      expect(yield* Ref.get(harness.setupCalls)).toEqual([]);
+      expect(yield* Ref.get(harness.commands)).toMatchObject([
+        { type: "thread.checkout.attach", projectId: LIB, worktreePath: null, branch: "main" },
+      ]);
+    }),
+  );
+
+  it.effect("honors an explicit mode over the thread's own", () =>
+    Effect.gen(function* () {
+      const local = yield* makeHarness();
+      const localResult = yield* local.call("attach_checkout", { project: "Lib", mode: "local" });
+      expect(localResult).toMatchObject({ mode: "local", path: "/code/lib" });
+      expect(yield* Ref.get(local.createdWorktrees)).toEqual([]);
+
+      const worktree = yield* makeHarness({ thread: makeThread({ worktreePath: null }) });
+      const worktreeResult = yield* worktree.call("attach_checkout", {
+        project: "Lib",
+        mode: "worktree",
+        branch: "feat/other",
+        baseBranch: "develop",
+      });
+      expect(worktreeResult).toMatchObject({
+        mode: "worktree",
+        path: "/worktrees/lib",
+        branch: "feat/other",
+      });
+      expect(yield* Ref.get(worktree.createdWorktrees)).toMatchObject([
+        { cwd: "/code/lib", refName: "develop", newRefName: "feat/other" },
+      ]);
+    }),
+  );
+
   it.effect("asks for a branch instead of copying a first-turn placeholder branch", () =>
     Effect.gen(function* () {
-      const harness = yield* makeHarness({
-        thread: { ...makeThread(), branch: "t3code/1a2b3c4d" },
-      });
-      const error = yield* harness.call("attach_worktree", { project: "Lib" }).pipe(Effect.flip);
-      expect(error).toMatchObject({ _tag: "WorktreeAttachFailedError" });
+      const harness = yield* makeHarness({ thread: makeThread({ branch: "t3code/1a2b3c4d" }) });
+      const error = yield* harness.call("attach_checkout", { project: "Lib" }).pipe(Effect.flip);
+      expect(error).toMatchObject({ _tag: "CheckoutAttachFailedError" });
       expect(error.message).toContain("Pass a branch name");
       expect(yield* Ref.get(harness.createdWorktrees)).toEqual([]);
       expect(yield* Ref.get(harness.commands)).toEqual([]);
@@ -266,70 +323,104 @@ describe("worktrees toolkit handlers", () => {
       const harness = yield* makeHarness({
         projects: [...PROJECTS, makeProject(ProjectId.make("project-lib-2"), "Lib", "/other/lib")],
       });
-      const byRoot = yield* harness.call("attach_worktree", { project: "/code/lib/" });
+      const byRoot = yield* harness.call("attach_checkout", { project: "/code/lib/" });
       expect(byRoot.project).toBe("Lib");
       const ambiguous = yield* harness
-        .call("attach_worktree", { project: "Lib" })
+        .call("attach_checkout", { project: "Lib" })
         .pipe(Effect.flip);
-      expect(ambiguous._tag).toBe("WorktreeProjectAmbiguousError");
+      expect(ambiguous._tag).toBe("CheckoutProjectAmbiguousError");
     }),
   );
 
-  it.effect("hands back the worktree the thread already has without creating another", () =>
+  it.effect("hands back the checkout the thread already has without creating another", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({
-        thread: makeThread([
-          {
-            worktreePath: "/worktrees/lib",
-            projectId: LIB,
-            branch: "feat/shared-change",
-            source: "manual",
-            linkedAt: NOW,
-          },
-        ]),
+        thread: makeThread({ branch: "t3code/1a2b3c4d", checkouts: [makeCheckout()] }),
       });
-      const result = yield* harness.call("attach_worktree", { project: "Lib" });
-      expect(result.alreadyAttached).toBe(true);
+      const result = yield* harness.call("attach_checkout", { project: "Lib" });
+      expect(result).toEqual({
+        project: "Lib",
+        path: "/worktrees/lib",
+        mode: "worktree",
+        branch: "feat/shared-change",
+        alreadyAttached: true,
+      });
       expect(yield* Ref.get(harness.createdWorktrees)).toEqual([]);
       expect(yield* Ref.get(harness.commands)).toEqual([]);
     }),
   );
 
-  it.effect("treats detaching a worktree that is not attached as done", () =>
+  it.effect("detaches a checkout by project title or workspace root", () =>
     Effect.gen(function* () {
-      const harness = yield* makeHarness();
-      const result = yield* harness.call("detach_worktree", { worktreePath: "/worktrees/lib" });
-      expect(result).toEqual({ worktreePath: "/worktrees/lib", wasAttached: false });
+      const attached = yield* makeHarness({ thread: makeThread({ checkouts: [makeCheckout()] }) });
+      expect(yield* attached.call("detach_checkout", { project: "lib" })).toEqual({
+        project: "Lib",
+        wasAttached: true,
+      });
+      expect(yield* attached.call("detach_checkout", { project: "/code/lib" })).toEqual({
+        project: "Lib",
+        wasAttached: true,
+      });
+      expect(yield* Ref.get(attached.commands)).toMatchObject([
+        { type: "thread.checkout.detach", threadId: THREAD_ID, projectId: LIB },
+        { type: "thread.checkout.detach", threadId: THREAD_ID, projectId: LIB },
+      ]);
+
+      // Detaching a checkout that is not attached is the outcome the agent asked for.
+      const detached = yield* makeHarness();
+      expect(yield* detached.call("detach_checkout", { project: "Lib" })).toEqual({
+        project: "Lib",
+        wasAttached: false,
+      });
     }),
   );
 });
 
-describe("listThreadWorktrees", () => {
-  it("reports the primary workspace, attached worktrees, and attachable projects", () => {
-    const docs = makeProject(ProjectId.make("project-docs"), "Docs", "/code/docs");
-    const result = listThreadWorktrees(
-      makeThread([
-        {
-          worktreePath: "/worktrees/lib",
-          projectId: LIB,
-          branch: "feat/shared-change",
-          source: "agent",
-          linkedAt: NOW,
-        },
-      ]),
-      [...PROJECTS, docs],
+describe("listThreadCheckouts", () => {
+  const docs = makeProject(ProjectId.make("project-docs"), "Docs", "/code/docs");
+  const tools = makeProject(ProjectId.make("project-tools"), "Tools", "/code/tools");
+
+  it("reports the workspace, attached checkouts with their paths, and attachable projects", () => {
+    const result = listThreadCheckouts(
+      makeThread({
+        checkouts: [
+          makeCheckout({ source: "agent" }),
+          makeCheckout({ projectId: docs.id, worktreePath: null, branch: "main" }),
+        ],
+      }),
+      [...PROJECTS, docs, tools],
     );
     expect(result).toEqual({
-      primary: { project: "App", path: "/code/app-wt", branch: "feat/shared-change" },
+      workspace: {
+        project: "App",
+        path: "/code/app-wt",
+        mode: "worktree",
+        branch: "feat/shared-change",
+      },
       attached: [
         {
           project: "Lib",
-          worktreePath: "/worktrees/lib",
+          path: "/worktrees/lib",
+          mode: "worktree",
           branch: "feat/shared-change",
           source: "agent",
         },
+        { project: "Docs", path: "/code/docs", mode: "local", branch: "main", source: "manual" },
       ],
-      attachableProjects: [{ title: "Docs", workspaceRoot: "/code/docs" }],
+      attachableProjects: [{ title: "Tools", workspaceRoot: "/code/tools" }],
+    });
+  });
+
+  it("reports a local thread's workspace at its project root", () => {
+    const result = listThreadCheckouts(
+      makeThread({ worktreePath: null, branch: "main" }),
+      PROJECTS,
+    );
+    expect(result.workspace).toEqual({
+      project: "App",
+      path: "/code/app",
+      mode: "local",
+      branch: "main",
     });
   });
 });

@@ -12,7 +12,6 @@ import {
   type OrchestrationThread,
   type ThreadPullRequestKey,
   type ThreadPullRequestLink,
-  type ThreadWorktreeLink,
   type OrchestrationThreadActivity,
 } from "@t3tools/contracts";
 import {
@@ -21,7 +20,6 @@ import {
   normalizeThreadPullRequestKey,
   threadPullRequestKeysEqual,
 } from "@t3tools/shared/threadPullRequests";
-import { threadWorktreeKeysEqual, threadWorktrees } from "@t3tools/shared/threadWorktrees";
 import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
@@ -136,13 +134,6 @@ function findPullRequestLink(
   key: ThreadPullRequestKey,
 ): ThreadPullRequestLink | undefined {
   return thread.pullRequests.find((link) => threadPullRequestKeysEqual(link, key));
-}
-
-function findWorktreeLink(
-  thread: Pick<OrchestrationThread, "worktrees">,
-  worktreePath: string,
-): ThreadWorktreeLink | undefined {
-  return threadWorktrees(thread).find((link) => threadWorktreeKeysEqual(link, { worktreePath }));
 }
 
 function withEventBase(
@@ -1118,7 +1109,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
-    case "thread.worktree.attach": {
+    case "thread.checkout.attach": {
       const thread = yield* requireThread({
         readModel,
         command,
@@ -1129,34 +1120,18 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         projectId: command.projectId,
       });
-      const worktreePath = command.worktreePath;
-      // Attached worktrees live beside the thread's own workspace, never on top of it.
-      const primaryPath =
-        thread.worktreePath ??
-        readModel.projects.find((entry) => entry.id === thread.projectId)?.workspaceRoot ??
-        null;
-      if (
-        command.projectId === thread.projectId ||
-        (primaryPath !== null &&
-          threadWorktreeKeysEqual({ worktreePath }, { worktreePath: primaryPath }))
-      ) {
+      if (command.projectId === thread.projectId) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `thread ${command.threadId} already works in project ${command.projectId}; attach a worktree of a different project`,
+          detail: `thread ${command.threadId} already works in project ${command.projectId}; attach a checkout of a different project`,
         });
       }
-      if (findWorktreeLink(thread, worktreePath) !== undefined) {
+      // One checkout per project, so the project identifies it for the user,
+      // the agent, and every command that addresses it.
+      if (thread.checkouts.some((checkout) => checkout.projectId === command.projectId)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `worktree ${worktreePath} is already attached to thread ${command.threadId}`,
-        });
-      }
-      // One worktree per project keeps per-turn checkpoint refs, which are
-      // named by thread and turn only, unique inside each repository.
-      if (threadWorktrees(thread).some((link) => link.projectId === command.projectId)) {
-        return yield* new OrchestrationCommandInvariantError({
-          commandType: command.type,
-          detail: `thread ${command.threadId} already has a worktree of project ${command.projectId} attached`,
+          detail: `thread ${command.threadId} already has a checkout of project ${command.projectId} attached`,
         });
       }
       const occurredAt = yield* nowIso;
@@ -1167,20 +1142,22 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           occurredAt,
           commandId: command.commandId,
         })),
-        type: "thread.worktree-attached" as const,
+        type: "thread.checkout-attached" as const,
         payload: {
           threadId: command.threadId,
-          link: {
-            worktreePath,
+          checkout: {
             projectId: command.projectId,
+            worktreePath: command.worktreePath,
             branch: command.branch,
+            pullRequest: null,
             source: command.source,
-            linkedAt: occurredAt,
-            ...(command.checkpointId === undefined ? {} : { checkpointId: command.checkpointId }),
+            attachedAt: occurredAt,
+            checkpointId: command.checkpointId,
           },
           updatedAt: occurredAt,
         },
       };
+      const directory = command.worktreePath ?? project.workspaceRoot;
       const attachedActivity = yield* decideOrchestrationCommand({
         readModel,
         command: {
@@ -1189,18 +1166,18 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           createdAt: occurredAt,
           activity: {
-            id: EventId.make(`worktree-attached:${command.commandId}`),
-            kind: "worktree.attached",
-            summary: `Attached ${project.title} worktree`,
+            id: EventId.make(`checkout-attached:${command.commandId}`),
+            kind: "checkout.attached",
+            summary: `Attached ${project.title} checkout`,
             tone: "info",
             turnId: null,
             createdAt: occurredAt,
             payload: {
               projectId: command.projectId,
-              worktreePath,
+              worktreePath: command.worktreePath,
               branch: command.branch,
               source: command.source,
-              detail: command.branch ? `${worktreePath} (${command.branch})` : worktreePath,
+              detail: command.branch ? `${directory} (${command.branch})` : directory,
             },
           },
         },
@@ -1211,29 +1188,30 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       ];
     }
 
-    case "thread.worktree.sync": {
+    case "thread.checkout.sync": {
       const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
-      const existing = findWorktreeLink(thread, command.worktreePath);
+      const existing = thread.checkouts.find(
+        (checkout) => checkout.projectId === command.projectId,
+      );
       if (existing === undefined) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `worktree ${command.worktreePath} is not attached to thread ${command.threadId}`,
+          detail: `project ${command.projectId} has no checkout attached to thread ${command.threadId}`,
         });
       }
-      const previous = existing.pullRequest ?? null;
       if (
         existing.branch === command.branch &&
-        previous?.number === command.pullRequest?.number &&
-        previous?.url === command.pullRequest?.url &&
-        previous?.state === command.pullRequest?.state
+        existing.pullRequest?.number === command.pullRequest?.number &&
+        existing.pullRequest?.url === command.pullRequest?.url &&
+        existing.pullRequest?.state === command.pullRequest?.state
       ) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `worktree ${command.worktreePath} of thread ${command.threadId} is unchanged`,
+          detail: `checkout of project ${command.projectId} on thread ${command.threadId} is unchanged`,
         });
       }
       const occurredAt = yield* nowIso;
@@ -1244,26 +1222,28 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           occurredAt,
           commandId: command.commandId,
         })),
-        type: "thread.worktree-attached",
+        type: "thread.checkout-attached",
         payload: {
           threadId: command.threadId,
-          link: { ...existing, branch: command.branch, pullRequest: command.pullRequest },
+          checkout: { ...existing, branch: command.branch, pullRequest: command.pullRequest },
           updatedAt: occurredAt,
         },
       };
     }
 
-    case "thread.worktree.detach": {
+    case "thread.checkout.detach": {
       const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
-      const existing = findWorktreeLink(thread, command.worktreePath);
+      const existing = thread.checkouts.find(
+        (checkout) => checkout.projectId === command.projectId,
+      );
       if (existing === undefined) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `worktree ${command.worktreePath} is not attached to thread ${command.threadId}`,
+          detail: `project ${command.projectId} has no checkout attached to thread ${command.threadId}`,
         });
       }
       const occurredAt = yield* nowIso;
@@ -1274,16 +1254,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           occurredAt,
           commandId: command.commandId,
         })),
-        type: "thread.worktree-detached" as const,
+        type: "thread.checkout-detached" as const,
         payload: {
           threadId: command.threadId,
-          worktreePath: existing.worktreePath,
+          projectId: existing.projectId,
           updatedAt: occurredAt,
         },
       };
-      const projectTitle =
-        readModel.projects.find((project) => project.id === existing.projectId)?.title ??
-        existing.worktreePath;
+      const project = readModel.projects.find((entry) => entry.id === existing.projectId);
+      const directory = existing.worktreePath ?? project?.workspaceRoot ?? existing.projectId;
       const detachedActivity = yield* decideOrchestrationCommand({
         readModel,
         command: {
@@ -1292,16 +1271,16 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           createdAt: occurredAt,
           activity: {
-            id: EventId.make(`worktree-detached:${command.commandId}`),
-            kind: "worktree.detached",
-            summary: `Detached ${projectTitle} worktree`,
+            id: EventId.make(`checkout-detached:${command.commandId}`),
+            kind: "checkout.detached",
+            summary: `Detached ${project?.title ?? existing.projectId} checkout`,
             tone: "info",
             turnId: null,
             createdAt: occurredAt,
             payload: {
               projectId: existing.projectId,
               worktreePath: existing.worktreePath,
-              detail: existing.worktreePath,
+              detail: directory,
             },
           },
         },

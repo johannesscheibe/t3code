@@ -39,7 +39,7 @@ import { useUiStateStore } from "../uiStateStore";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
 import {
   formatWorktreePathForDisplay,
-  getOrphanedAttachedWorktrees,
+  getOrphanedCheckoutWorktrees,
   getOrphanedWorktreePathForThread,
 } from "../worktreeCleanup";
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
@@ -364,16 +364,18 @@ export function useThreadActions() {
         ...(orphanedWorktreePath !== null && threadProject !== null
           ? [{ cwd: threadProject.workspaceRoot, path: orphanedWorktreePath }]
           : []),
-        ...getOrphanedAttachedWorktrees(
+        ...getOrphanedCheckoutWorktrees(
           survivingThreads,
           threadRef.threadId,
           environmentProjects,
-        ).flatMap((link) => {
+        ).flatMap((checkout) => {
           const project = readProject({
             environmentId: threadRef.environmentId,
-            projectId: link.projectId,
+            projectId: checkout.projectId,
           });
-          return project === null ? [] : [{ cwd: project.workspaceRoot, path: link.worktreePath }];
+          return project === null
+            ? []
+            : [{ cwd: project.workspaceRoot, path: checkout.worktreePath }];
         }),
       ];
       const localApi = readLocalApi();

@@ -133,8 +133,8 @@ import { linkCreatedPullRequest } from "./git/linkCreatedPullRequest.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
-import * as WorktreeRemoval from "./threadWorktrees/WorktreeRemoval.ts";
-import * as ThreadWorktreeAttach from "./threadWorktrees/ThreadWorktreeAttach.ts";
+import * as WorktreeRemoval from "./threadCheckouts/WorktreeRemoval.ts";
+import * as ThreadCheckoutAttach from "./threadCheckouts/ThreadCheckoutAttach.ts";
 import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
 import { importRecentAgentThreads } from "./project/AgentSessionImporter.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
@@ -1610,7 +1610,7 @@ const makeWsRpcLayer = (
         vcsStatusBroadcaster
           .refreshStatus(cwd)
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
-      const attachThreadWorktree = yield* ThreadWorktreeAttach.make;
+      const attachThreadCheckout = yield* ThreadCheckoutAttach.make;
       const removeWorktree = yield* WorktreeRemoval.make;
 
       return WsRpcGroup.of({
@@ -3004,11 +3004,16 @@ const makeWsRpcLayer = (
             removeWorktree(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
             { "rpc.aggregate": "vcs" },
           ),
-        [WS_METHODS.vcsAttachThreadWorktree]: (input) =>
+        [WS_METHODS.vcsAttachThreadCheckout]: (input) =>
           observeRpcEffect(
-            WS_METHODS.vcsAttachThreadWorktree,
-            attachThreadWorktree(input, "manual").pipe(
-              Effect.tap(({ link }) => refreshGitStatus(link.worktreePath)),
+            WS_METHODS.vcsAttachThreadCheckout,
+            attachThreadCheckout(input, "manual").pipe(
+              // A project's own checkout already has its status tracked with the project.
+              Effect.tap(({ checkout }) =>
+                checkout.worktreePath === null
+                  ? Effect.void
+                  : refreshGitStatus(checkout.worktreePath),
+              ),
             ),
             { "rpc.aggregate": "vcs" },
           ),

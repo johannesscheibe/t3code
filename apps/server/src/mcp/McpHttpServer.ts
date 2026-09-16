@@ -31,8 +31,8 @@ import {
 } from "./toolkits/preview/tools.ts";
 import { PullRequestsToolkitHandlersLive } from "./toolkits/pullRequests/handlers.ts";
 import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
-import { WorktreesToolkitHandlersLive } from "./toolkits/worktrees/handlers.ts";
-import { WorktreesToolkit } from "./toolkits/worktrees/tools.ts";
+import { CheckoutsToolkitHandlersLive } from "./toolkits/checkouts/handlers.ts";
+import { CheckoutsToolkit } from "./toolkits/checkouts/tools.ts";
 import {
   DeviceScreenshotToolkitHandlersLive,
   DeviceStandardToolkitHandlersLive,
@@ -610,8 +610,8 @@ export const PullRequestsToolkitRegistrationLive = McpServer.toolkit(PullRequest
   Layer.provide(PullRequestsToolkitHandlersLive),
 );
 
-export const WorktreesToolkitRegistrationLive = McpServer.toolkit(WorktreesToolkit).pipe(
-  Layer.provide(WorktreesToolkitHandlersLive),
+export const CheckoutsToolkitRegistrationLive = McpServer.toolkit(CheckoutsToolkit).pipe(
+  Layer.provide(CheckoutsToolkitHandlersLive),
 );
 
 const DeviceStandardToolkitRegistrationLive = McpServer.toolkit(DeviceStandardToolkit).pipe(
@@ -637,6 +637,6 @@ const McpTransportLive = McpServer.layerHttp({
 export const layer = Layer.mergeAll(
   PreviewToolkitRegistrationLive,
   PullRequestsToolkitRegistrationLive,
-  WorktreesToolkitRegistrationLive,
+  CheckoutsToolkitRegistrationLive,
   DeviceToolkitRegistrationLive,
 ).pipe(Layer.provideMerge(McpTransportLive));

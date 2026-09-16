@@ -99,6 +99,7 @@ function makeReadModel(
       branch: null,
       worktreePath: null,
       pullRequests: [],
+      checkouts: [],
       createdAt: now,
       updatedAt: now,
       archivedAt: null,

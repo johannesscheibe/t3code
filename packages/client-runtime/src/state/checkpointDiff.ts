@@ -2,6 +2,7 @@ import type {
   EnvironmentId,
   OrchestrationGetFullThreadDiffResult,
   OrchestrationGetTurnDiffResult,
+  ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
 
@@ -22,6 +23,6 @@ export interface CheckpointDiffTarget {
   readonly toTurnCount: number | null;
   readonly ignoreWhitespace: boolean;
   readonly cacheScope?: string | null;
-  /** An attached worktree to diff instead of the thread's primary workspace. */
-  readonly worktreePath?: string | null;
+  /** The project of an attached checkout to diff instead of the thread's own workspace. */
+  readonly checkoutProjectId?: ProjectId | null;
 }

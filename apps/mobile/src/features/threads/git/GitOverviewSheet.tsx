@@ -66,7 +66,7 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
     [selectedThread?.pullRequests, supportsLinkedPrSnapshots],
   );
   const projects = useProjects();
-  const attachedWorktrees = selectedThread?.worktrees ?? [];
+  const attachedCheckouts = selectedThread?.checkouts ?? [];
   const gitState = useSelectedThreadGitState();
   const gitActions = useSelectedThreadGitActions();
   const theme = useUniwindTheme();
@@ -345,22 +345,23 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
         </View>
       ) : null}
 
-      {attachedWorktrees.length > 0 ? (
+      {attachedCheckouts.length > 0 ? (
         <View className="gap-2">
           <Text className="px-1 text-xs font-t3-bold text-foreground-muted">
-            Attached worktrees
+            Attached checkouts
           </Text>
           <View className="overflow-hidden rounded-2xl border border-border bg-card px-3 py-1">
-            {attachedWorktrees.map((link, index) => {
-              const title =
-                projects.find(
-                  (project) =>
-                    project.environmentId === selectedThread?.environmentId &&
-                    project.id === link.projectId,
-                )?.title ?? link.worktreePath;
-              const pullRequest = link.pullRequest ?? null;
+            {attachedCheckouts.map((checkout, index) => {
+              const project = projects.find(
+                (candidate) =>
+                  candidate.environmentId === selectedThread?.environmentId &&
+                  candidate.id === checkout.projectId,
+              );
+              const title = project?.title ?? checkout.projectId;
+              const directory = checkout.worktreePath ?? project?.workspaceRoot ?? "";
+              const pullRequest = checkout.pullRequest;
               return (
-                <View key={link.worktreePath}>
+                <View key={checkout.projectId}>
                   {index > 0 ? <View className="ml-12 h-px bg-border" /> : null}
                   <SheetListRow
                     icon={
@@ -368,11 +369,11 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
                         ? "arrow.triangle.pull"
                         : "point.topleft.down.curvedto.point.bottomright.up"
                     }
-                    title={link.branch ? `${title} · ${link.branch}` : title}
+                    title={checkout.branch ? `${title} · ${checkout.branch}` : title}
                     subtitle={
                       pullRequest
-                        ? `#${pullRequest.number} ${pullRequest.state} · ${link.worktreePath}`
-                        : link.worktreePath
+                        ? `#${pullRequest.number} ${pullRequest.state} · ${directory}`
+                        : directory
                     }
                     onPress={() => {
                       if (!pullRequest) return;

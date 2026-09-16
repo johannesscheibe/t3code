@@ -105,6 +105,7 @@ const BASE_THREAD: OrchestrationThread = {
   settledOverride: null,
   settledAt: null,
   pullRequests: [],
+  checkouts: [],
   deletedAt: null,
   messages: [RECENT_MESSAGE],
   proposedPlans: [],

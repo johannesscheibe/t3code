@@ -3064,7 +3064,7 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it("restarts the provider session with attached worktrees only when the set changes", async () => {
+  it("restarts the provider session with attached checkouts only when the set changes", async () => {
     const harness = await createHarness({
       threadModelSelection: {
         instanceId: ProviderInstanceId.make("claudeAgent"),
@@ -3107,13 +3107,38 @@ describe("ProviderCommandReactor", () => {
     );
     await Effect.runPromise(
       harness.engine.dispatch({
-        type: "thread.worktree.attach",
-        commandId: CommandId.make("cmd-thread-worktree-attach"),
+        type: "project.create",
+        commandId: CommandId.make("cmd-project-create-docs"),
+        projectId: asProjectId("project-docs"),
+        title: "Docs",
+        workspaceRoot: "/tmp/provider-docs",
+        defaultModelSelection: null,
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.checkout.attach",
+        commandId: CommandId.make("cmd-thread-checkout-attach-lib"),
         threadId: ThreadId.make("thread-1"),
-        worktreePath: "/tmp/provider-library-worktree",
         projectId: asProjectId("project-lib"),
+        worktreePath: "/tmp/provider-library-worktree",
         branch: null,
         source: "agent",
+        checkpointId: "checkout-lib",
+      }),
+    );
+    // A local checkout has no worktree path; the agent works in the project root.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.checkout.attach",
+        commandId: CommandId.make("cmd-thread-checkout-attach-docs"),
+        threadId: ThreadId.make("thread-1"),
+        projectId: asProjectId("project-docs"),
+        worktreePath: null,
+        branch: "main",
+        source: "manual",
+        checkpointId: "checkout-docs",
       }),
     );
 
@@ -3122,7 +3147,7 @@ describe("ProviderCommandReactor", () => {
     expect(harness.startSession.mock.calls.length).toBe(2);
     expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
       cwd: "/tmp/provider-project",
-      additionalDirectories: ["/tmp/provider-library-worktree"],
+      additionalDirectories: ["/tmp/provider-library-worktree", "/tmp/provider-docs"],
       resumeCursor: { opaque: "resume-1" },
     });
 

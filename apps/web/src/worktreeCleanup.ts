@@ -1,35 +1,41 @@
-import type { OrchestrationProjectShell, ThreadWorktreeLink } from "@t3tools/contracts";
-import { normalizeThreadWorktreePath, threadWorktrees } from "@t3tools/shared/threadWorktrees";
+import type { OrchestrationProjectShell } from "@t3tools/contracts";
 
 import type { ThreadShell } from "./types";
 
-type WorktreeUser = Pick<ThreadShell, "id" | "projectId" | "worktreePath"> & {
-  readonly worktrees?: ReadonlyArray<ThreadWorktreeLink> | undefined;
-};
+type WorktreeUser = Pick<ThreadShell, "id" | "worktreePath" | "checkouts">;
+type WorktreeProject = Pick<OrchestrationProjectShell, "id" | "workspaceRoot">;
 
-function normalizeWorktreePath(path: string | null): string | null {
-  const trimmed = path?.trim();
+/** Trailing separators are noise: `/repo/wt/` and `/repo/wt` name the same directory. */
+function normalizeWorktreePath(path: string | null | undefined): string | null {
+  const trimmed = path?.trim().replace(/(?<=.)[\\/]+$/, "");
   if (!trimmed) {
     return null;
   }
-  return normalizeThreadWorktreePath(trimmed);
+  return trimmed;
 }
 
-type WorktreeProject = Pick<OrchestrationProjectShell, "id" | "workspaceRoot">;
+/** Whether a thread works in the worktree, as its own workspace or an attached checkout. */
+function usesWorktree(thread: WorktreeUser, path: string): boolean {
+  return (
+    normalizeWorktreePath(thread.worktreePath) === path ||
+    thread.checkouts.some((checkout) => normalizeWorktreePath(checkout.worktreePath) === path)
+  );
+}
 
-/** Whether a thread works in the path, as its primary workspace or an attachment. */
-function usesWorktree(
-  thread: WorktreeUser,
+/**
+ * Whether deleting the worktree at `path` along with `threadId` is safe. A
+ * registered project's root is never deleted: another project may be registered
+ * at a linked worktree, and its local threads record no worktree path there.
+ */
+function isOrphanedWorktree(
+  threads: ReadonlyArray<WorktreeUser>,
+  threadId: ThreadShell["id"],
   path: string,
   projects: ReadonlyArray<WorktreeProject>,
 ): boolean {
   return (
-    normalizeWorktreePath(
-      thread.worktreePath ??
-        projects.find((project) => project.id === thread.projectId)?.workspaceRoot ??
-        null,
-    ) === path ||
-    threadWorktrees(thread).some((link) => normalizeWorktreePath(link.worktreePath) === path)
+    !projects.some((project) => normalizeWorktreePath(project.workspaceRoot) === path) &&
+    !threads.some((thread) => thread.id !== threadId && usesWorktree(thread, path))
   );
 }
 
@@ -39,42 +45,26 @@ export function getOrphanedWorktreePathForThread(
   projects: ReadonlyArray<WorktreeProject>,
 ): string | null {
   const targetThread = threads.find((thread) => thread.id === threadId);
-  if (!targetThread) {
-    return null;
-  }
-
-  const targetWorktreePath = normalizeWorktreePath(targetThread.worktreePath);
-  if (
-    !targetWorktreePath ||
-    projects.some((project) => normalizeWorktreePath(project.workspaceRoot) === targetWorktreePath)
-  ) {
-    return null;
-  }
-
-  const isShared = threads.some(
-    (thread) => thread.id !== threadId && usesWorktree(thread, targetWorktreePath, projects),
-  );
-
-  return isShared ? null : targetWorktreePath;
+  const path = normalizeWorktreePath(targetThread?.worktreePath);
+  return path !== null && isOrphanedWorktree(threads, threadId, path, projects) ? path : null;
 }
 
-/** Attached worktrees no other thread works in, safe to offer for deletion with this thread. */
-export function getOrphanedAttachedWorktrees(
+/**
+ * Attached checkouts that are worktrees no other thread works in, offered for
+ * deletion by the same rule as the thread's own worktree. A project's own
+ * checkout has no worktree and is never offered.
+ */
+export function getOrphanedCheckoutWorktrees(
   threads: ReadonlyArray<WorktreeUser>,
   threadId: ThreadShell["id"],
   projects: ReadonlyArray<WorktreeProject>,
-): ReadonlyArray<ThreadWorktreeLink> {
+) {
   const targetThread = threads.find((thread) => thread.id === threadId);
-  if (!targetThread) {
-    return [];
-  }
-  return threadWorktrees(targetThread).filter((link) => {
-    const path = normalizeWorktreePath(link.worktreePath);
-    return (
-      path !== null &&
-      !projects.some((project) => normalizeWorktreePath(project.workspaceRoot) === path) &&
-      !threads.some((thread) => thread.id !== threadId && usesWorktree(thread, path, projects))
-    );
+  return (targetThread?.checkouts ?? []).flatMap((checkout) => {
+    const path = normalizeWorktreePath(checkout.worktreePath);
+    return path !== null && isOrphanedWorktree(threads, threadId, path, projects)
+      ? [{ ...checkout, worktreePath: path }]
+      : [];
   });
 }
 

@@ -7,7 +7,13 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
-import type { ScopedThreadRef, TurnId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  OrchestrationThreadShell,
+  ProjectId,
+  ScopedThreadRef,
+  TurnId,
+} from "@t3tools/contracts";
 import {
   ArrowRightIcon,
   CheckIcon,
@@ -46,7 +52,7 @@ import { PREFERRED_HIGHLIGHTER } from "../lib/syntaxHighlighting";
 import { areAllDiffFilesCollapsed, toggleAllDiffFiles } from "../lib/diffCollapse";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { useWorkspaceMutationRefresh } from "../hooks/useWorkspaceMutationRefresh";
-import { useProject, useProjects, useThread } from "../state/entities";
+import { useProject, useThread } from "../state/entities";
 import { resolveThreadRouteRef } from "../threadRoutes";
 import { useClientSettings, useUpdateClientSettings } from "../hooks/useSettings";
 import { formatShortTimestamp } from "../timestampFormat";
@@ -78,6 +84,7 @@ import {
   DropdownMenuTrigger,
 } from "./ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+import { useThreadCheckouts } from "./threadCheckouts";
 import { useEnvironmentQuery } from "../state/query";
 import { useAtomCommand } from "../state/use-atom-command";
 import { serverEnvironment } from "../state/server";
@@ -96,6 +103,69 @@ interface CollapsedDiffFilesState {
 }
 
 const EMPTY_COLLAPSED_DIFF_FILE_KEYS: ReadonlySet<string> = new Set();
+
+/** Picks which checkout the panel reviews: the thread's own workspace or an attached checkout. */
+function DiffCheckoutMenu({
+  environmentId,
+  thread,
+  selectedProjectId,
+  onSelect,
+}: {
+  environmentId: EnvironmentId;
+  thread: Pick<
+    OrchestrationThreadShell,
+    "id" | "projectId" | "branch" | "worktreePath" | "checkouts"
+  >;
+  selectedProjectId: ProjectId | null;
+  onSelect: (projectId: ProjectId | null) => void;
+}) {
+  const threadCheckouts = useThreadCheckouts(environmentId, thread);
+  const { checkouts } = threadCheckouts;
+  if (!threadCheckouts.supported || checkouts.length === 0) return null;
+
+  const selectedCheckout =
+    checkouts.find((checkout) => checkout.projectId === selectedProjectId) ?? null;
+  const selectedTitle = threadCheckouts.projectTitle(
+    selectedCheckout?.projectId ?? thread.projectId,
+  );
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        className="inline-flex h-6 max-w-48 items-center gap-1 rounded-md px-2 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring"
+        aria-label={`Checkout: ${selectedTitle}`}
+      >
+        <span className="truncate">{selectedTitle}</span>
+        <ChevronDownIcon className="size-3.5 shrink-0 opacity-70" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-64">
+        <DropdownMenuItem
+          className={selectedCheckout === null ? "bg-foreground/[0.08]" : undefined}
+          onClick={() => onSelect(null)}
+        >
+          <span className="truncate">{threadCheckouts.projectTitle(thread.projectId)}</span>
+        </DropdownMenuItem>
+        {checkouts.map((checkout) => (
+          <DropdownMenuItem
+            key={checkout.projectId}
+            className={
+              checkout.projectId === selectedCheckout?.projectId
+                ? "bg-foreground/[0.08]"
+                : undefined
+            }
+            onClick={() => onSelect(checkout.projectId)}
+          >
+            <span className="truncate">{threadCheckouts.projectTitle(checkout.projectId)}</span>
+            {checkout.branch ? (
+              <span className="ml-auto truncate text-xs text-muted-foreground">
+                {checkout.branch}
+              </span>
+            ) : null}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
 
 interface DiffPanelProps {
   mode?: DiffPanelMode;
@@ -145,25 +215,25 @@ export default function DiffPanel({
         }
       : null,
   );
-  const projects = useProjects();
-  // The panel reviews one checkout at a time. A detached worktree falls back to the primary.
-  const [selectedWorktreePath, setSelectedWorktreePath] = useState<string | null>(null);
-  const selectedWorktree =
-    activeThread?.worktrees?.find((link) => link.worktreePath === selectedWorktreePath) ?? null;
-  const worktreeProjectTitle = (projectId: string) =>
-    projects.find(
-      (project) =>
-        project.environmentId === activeThread?.environmentId && project.id === projectId,
-    )?.title ?? projectId;
-  const selectedCheckoutTitle = selectedWorktree
-    ? worktreeProjectTitle(selectedWorktree.projectId)
-    : (activeProject?.title ?? "Primary workspace");
-  const activeCwd =
-    selectedWorktree?.worktreePath ?? activeThread?.worktreePath ?? activeProject?.workspaceRoot;
-  const activeRepositoryRoot =
-    selectedWorktree !== null || activeThread?.worktreePath
-      ? undefined
-      : activeProject?.repositoryIdentity?.rootPath;
+  // The panel reviews one checkout at a time. A detached checkout falls back to the thread's own.
+  const [selectedCheckoutProjectId, setSelectedCheckoutProjectId] = useState<ProjectId | null>(
+    null,
+  );
+  const selectedCheckout =
+    activeThread?.checkouts.find((checkout) => checkout.projectId === selectedCheckoutProjectId) ??
+    null;
+  const selectedCheckoutProject = useProject(
+    activeThread && selectedCheckout
+      ? { environmentId: activeThread.environmentId, projectId: selectedCheckout.projectId }
+      : null,
+  );
+  // An attached checkout resolves its directory exactly like the thread's own workspace.
+  const activeWorkspace = selectedCheckout ?? activeThread;
+  const activeWorkspaceProject = selectedCheckout ? selectedCheckoutProject : activeProject;
+  const activeCwd = activeWorkspace?.worktreePath ?? activeWorkspaceProject?.workspaceRoot;
+  const activeRepositoryRoot = activeWorkspace?.worktreePath
+    ? undefined
+    : activeWorkspaceProject?.repositoryIdentity?.rootPath;
   const serverConfig = useAtomValue(
     serverEnvironment.configValueAtom(activeThread?.environmentId ?? null),
   );
@@ -238,7 +308,7 @@ export default function DiffPanel({
         : `Turn ${selectedCheckpointTurnCount ?? "?"}`;
   const reviewSectionId = selectedTurn ? `turn:${selectedTurn.turnId}` : selectedGitScope;
   const collapseScopeKey = routeThreadRef
-    ? `${routeThreadRef.environmentId}:${routeThreadRef.threadId}:${selectedWorktree?.worktreePath ?? ""}:${reviewSectionId}`
+    ? `${routeThreadRef.environmentId}:${routeThreadRef.threadId}:${selectedCheckout?.projectId ?? ""}:${reviewSectionId}`
     : null;
   const codeViewMountKey = `${collapseScopeKey ?? reviewSectionId}:${codeViewRevision}`;
   const reviewSectionTitle = selectedTurn
@@ -263,9 +333,9 @@ export default function DiffPanel({
       fromTurnCount: selectedCheckpointRange?.fromTurnCount ?? null,
       toTurnCount: selectedCheckpointRange?.toTurnCount ?? null,
       ignoreWhitespace: diffIgnoreWhitespace,
-      worktreePath: selectedWorktree?.worktreePath ?? null,
+      checkoutProjectId: selectedCheckout?.projectId ?? null,
       cacheScope: selectedTurn
-        ? `turn:${selectedTurn.turnId}:${selectedWorktree?.worktreePath ?? ""}`
+        ? `turn:${selectedTurn.turnId}:${selectedCheckout?.projectId ?? ""}`
         : null,
     },
     { enabled: isGitRepo && selectedTurn !== undefined },
@@ -502,9 +572,9 @@ export default function DiffPanel({
   const openDiffFile = useCallback(
     (filePath: string) => {
       openDiffFilePrimaryAction({
-        // The thread's file panel reads its primary checkout. A file from an
-        // attached worktree opens in the editor by absolute path instead.
-        threadRef: selectedWorktree === null ? routeThreadRef : null,
+        // The thread's file panel reads its own workspace. A file from an
+        // attached checkout opens in the editor by absolute path instead.
+        threadRef: selectedCheckout === null ? routeThreadRef : null,
         filePath,
         activeCwd,
         repositoryRoot: activeRepositoryRoot,
@@ -527,7 +597,7 @@ export default function DiffPanel({
         },
       });
     },
-    [activeCwd, activeRepositoryRoot, openInPreferredEditor, routeThreadRef, selectedWorktree],
+    [activeCwd, activeRepositoryRoot, openInPreferredEditor, routeThreadRef, selectedCheckout],
   );
   const toggleDiffFileCollapsed = useCallback(
     (fileKey: string) => {
@@ -575,42 +645,13 @@ export default function DiffPanel({
   const headerRow = (
     <>
       <div className="flex min-w-0 flex-1 items-center gap-3 [-webkit-app-region:no-drag]">
-        {activeThread?.worktrees && activeThread.worktrees.length > 0 ? (
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              className="inline-flex h-6 max-w-48 items-center gap-1 rounded-md px-2 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring"
-              aria-label={`Checkout: ${selectedCheckoutTitle}`}
-            >
-              <span className="truncate">{selectedCheckoutTitle}</span>
-              <ChevronDownIcon className="size-3.5 shrink-0 opacity-70" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-64">
-              <DropdownMenuItem
-                className={selectedWorktree === null ? "bg-foreground/[0.08]" : undefined}
-                onClick={() => setSelectedWorktreePath(null)}
-              >
-                <span className="truncate">{activeProject?.title ?? "Primary workspace"}</span>
-              </DropdownMenuItem>
-              {activeThread.worktrees.map((link) => (
-                <DropdownMenuItem
-                  key={link.worktreePath}
-                  className={
-                    link.worktreePath === selectedWorktree?.worktreePath
-                      ? "bg-foreground/[0.08]"
-                      : undefined
-                  }
-                  onClick={() => setSelectedWorktreePath(link.worktreePath)}
-                >
-                  <span className="truncate">{worktreeProjectTitle(link.projectId)}</span>
-                  {link.branch ? (
-                    <span className="ml-auto truncate text-xs text-muted-foreground">
-                      {link.branch}
-                    </span>
-                  ) : null}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+        {activeThread ? (
+          <DiffCheckoutMenu
+            environmentId={activeThread.environmentId}
+            thread={activeThread}
+            selectedProjectId={selectedCheckout?.projectId ?? null}
+            onSelect={setSelectedCheckoutProjectId}
+          />
         ) : null}
         <DropdownMenu>
           <DropdownMenuTrigger

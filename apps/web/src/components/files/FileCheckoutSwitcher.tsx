@@ -1,4 +1,4 @@
-import type { EnvironmentId, OrchestrationThreadShell } from "@t3tools/contracts";
+import type { EnvironmentId, OrchestrationThreadShell, ProjectId } from "@t3tools/contracts";
 import {
   ChevronDownIcon,
   CopyIcon,
@@ -12,7 +12,7 @@ import { useState } from "react";
 
 import { readLocalApi } from "~/localApi";
 import { cn } from "~/lib/utils";
-import { AttachWorktreeDialog, useThreadCheckouts } from "../threadCheckouts";
+import { AttachCheckoutDialog, useThreadCheckouts } from "../threadCheckouts";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,36 +25,42 @@ import {
 
 /**
  * Picks which checkout the Files tab browses: the thread's workspace or an
- * attached worktree. Doubles as the thread's worktree management surface:
- * attach, detach, and open the selected worktree's pull request live here.
+ * attached checkout. Doubles as the thread's checkout management surface:
+ * attach, detach, and open the selected checkout's pull request live here.
  */
 export function FileCheckoutSwitcher({
   environmentId,
   thread,
-  selectedWorktreePath,
+  selectedProjectId,
   onSelect,
 }: {
   environmentId: EnvironmentId;
-  thread: Pick<OrchestrationThreadShell, "id" | "projectId" | "branch" | "worktreePath" | "worktrees">;
-  selectedWorktreePath: string | null;
-  onSelect: (worktreePath: string | null) => void;
+  thread: Pick<
+    OrchestrationThreadShell,
+    "id" | "projectId" | "branch" | "worktreePath" | "checkouts"
+  >;
+  selectedProjectId: ProjectId | null;
+  onSelect: (projectId: ProjectId | null) => void;
 }) {
-  const checkouts = useThreadCheckouts(environmentId, thread);
+  const threadCheckouts = useThreadCheckouts(environmentId, thread);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const { links, attachableProjects } = checkouts;
-  const selectedLink = links.find((link) => link.worktreePath === selectedWorktreePath) ?? null;
-  const selectedPullRequest = selectedLink?.pullRequest ?? null;
+  const { checkouts, attachableProjects } = threadCheckouts;
+  const selectedCheckout =
+    checkouts.find((checkout) => checkout.projectId === selectedProjectId) ?? null;
+  const selectedPullRequest = selectedCheckout?.pullRequest ?? null;
+  const selectedDirectory = selectedCheckout ? threadCheckouts.directory(selectedCheckout) : null;
 
-  if (!checkouts.supported || (links.length === 0 && attachableProjects.length === 0)) return null;
+  if (!threadCheckouts.supported || (checkouts.length === 0 && attachableProjects.length === 0)) {
+    return null;
+  }
 
   // Same icons as the composer's workspace selector: a folder for a local checkout,
   // a git folder for a worktree.
-  const primaryIsLocalCheckout = thread.worktreePath === null;
-  const selectedIsLocalCheckout = selectedLink
-    ? checkouts.isLocalCheckout(selectedLink)
-    : primaryIsLocalCheckout;
-  const primaryTitle = checkouts.projectTitle(thread.projectId);
-  const selectedTitle = selectedLink ? checkouts.projectTitle(selectedLink.projectId) : primaryTitle;
+  const selectedIsLocalCheckout = (selectedCheckout ?? thread).worktreePath === null;
+  const primaryTitle = threadCheckouts.projectTitle(thread.projectId);
+  const selectedTitle = selectedCheckout
+    ? threadCheckouts.projectTitle(selectedCheckout.projectId)
+    : primaryTitle;
 
   return (
     <>
@@ -75,42 +81,45 @@ export function FileCheckoutSwitcher({
           <DropdownMenuGroup>
             <DropdownMenuLabel>Checkout</DropdownMenuLabel>
             <DropdownMenuItem
-              className={cn("gap-2", selectedLink === null ? "bg-foreground/[0.08]" : undefined)}
+              className={cn(
+                "gap-2",
+                selectedCheckout === null ? "bg-foreground/[0.08]" : undefined,
+              )}
               onClick={() => onSelect(null)}
             >
-              {primaryIsLocalCheckout ? (
+              {thread.worktreePath === null ? (
                 <FolderIcon className="size-3.5" />
               ) : (
                 <FolderGit2Icon className="size-3.5" />
               )}
               <span className="truncate">{primaryTitle}</span>
             </DropdownMenuItem>
-            {links.map((link) => (
+            {checkouts.map((checkout) => (
               <DropdownMenuItem
-                key={link.worktreePath}
+                key={checkout.projectId}
                 className={cn(
                   "gap-2",
-                  link.worktreePath === selectedLink?.worktreePath
+                  checkout.projectId === selectedCheckout?.projectId
                     ? "bg-foreground/[0.08]"
                     : undefined,
                 )}
-                onClick={() => onSelect(link.worktreePath)}
+                onClick={() => onSelect(checkout.projectId)}
               >
-                {checkouts.isLocalCheckout(link) ? (
+                {checkout.worktreePath === null ? (
                   <FolderIcon className="size-3.5" />
                 ) : (
                   <FolderGit2Icon className="size-3.5" />
                 )}
-                <span className="truncate">{checkouts.projectTitle(link.projectId)}</span>
-                {link.branch ? (
+                <span className="truncate">{threadCheckouts.projectTitle(checkout.projectId)}</span>
+                {checkout.branch ? (
                   <span className="ml-auto truncate text-xs text-muted-foreground">
-                    {link.branch}
+                    {checkout.branch}
                   </span>
                 ) : null}
               </DropdownMenuItem>
             ))}
           </DropdownMenuGroup>
-          {selectedLink ? (
+          {selectedCheckout ? (
             <>
               <DropdownMenuSeparator />
               {selectedPullRequest ? (
@@ -121,20 +130,22 @@ export function FileCheckoutSwitcher({
                   Open pull request #{selectedPullRequest.number}
                 </DropdownMenuItem>
               ) : null}
-              <DropdownMenuItem
-                onClick={() => void navigator.clipboard.writeText(selectedLink.worktreePath)}
-              >
-                <CopyIcon className="size-3.5" />
-                Copy path
-              </DropdownMenuItem>
+              {selectedDirectory !== null ? (
+                <DropdownMenuItem
+                  onClick={() => void navigator.clipboard.writeText(selectedDirectory)}
+                >
+                  <CopyIcon className="size-3.5" />
+                  Copy path
+                </DropdownMenuItem>
+              ) : null}
               <DropdownMenuItem
                 onClick={() => {
                   onSelect(null);
-                  void checkouts.detach(selectedLink);
+                  void threadCheckouts.detach(selectedCheckout);
                 }}
               >
                 <UnlinkIcon className="size-3.5" />
-                Detach worktree
+                Detach checkout
               </DropdownMenuItem>
             </>
           ) : null}
@@ -143,18 +154,19 @@ export function FileCheckoutSwitcher({
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => setDialogOpen(true)}>
                 <FolderPlusIcon className="size-3.5" />
-                Attach worktree…
+                Attach checkout…
               </DropdownMenuItem>
             </>
           ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
       {dialogOpen ? (
-        <AttachWorktreeDialog
+        <AttachCheckoutDialog
           environmentId={environmentId}
           threadId={thread.id}
           projects={attachableProjects}
-          defaultBranch={checkouts.defaultBranch}
+          defaultBranch={threadCheckouts.defaultBranch}
+          defaultMode={threadCheckouts.defaultAttachMode}
           onClose={() => setDialogOpen(false)}
         />
       ) : null}

@@ -46,6 +46,7 @@ function makeReadModel(): OrchestrationReadModel {
         interactionMode: "default",
         branch: null,
         pullRequests: [],
+        checkouts: [],
         worktreePath: null,
         latestTurn: null,
         createdAt: NOW,

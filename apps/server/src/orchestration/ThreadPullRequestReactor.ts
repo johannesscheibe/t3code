@@ -11,7 +11,6 @@ import {
   type OrchestrationThreadShell,
 } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
-import { threadWorktrees } from "@t3tools/shared/threadWorktrees";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -96,10 +95,10 @@ export const make = Effect.gen(function* () {
     }
   };
 
-  // Attached worktrees get the same branch discovery against their own
-  // project. The result lives on the link, beside the thread's own branch PR.
-  const synchronizeAttachedWorktrees = Effect.fn(
-    "ThreadPullRequestReactor.synchronizeAttachedWorktrees",
+  // Attached checkouts get the same branch discovery against their own
+  // project. The result lives on the checkout, beside the thread's own branch PR.
+  const synchronizeAttachedCheckouts = Effect.fn(
+    "ThreadPullRequestReactor.synchronizeAttachedCheckouts",
   )(function* (
     request: RefreshRequest,
     threads: ReadonlyArray<OrchestrationThreadShell>,
@@ -110,29 +109,35 @@ export const make = Effect.gen(function* () {
       (request.threadId === null || thread.id === request.threadId) &&
       ((thread.settledOverride !== "settled" && thread.settledAt === null) ||
         request.threadId !== null)
-        ? threadWorktrees(thread)
-            .filter((link) => link.branch !== null)
-            .map((link) => ({ thread, link }))
+        ? thread.checkouts.flatMap((checkout) => {
+            const project = projects.get(checkout.projectId);
+            return project === undefined || checkout.branch === null
+              ? []
+              : [
+                  {
+                    thread,
+                    checkout,
+                    project,
+                    branch: checkout.branch,
+                    cwd: checkout.worktreePath ?? project.workspaceRoot,
+                  },
+                ];
+          })
         : [],
     );
-    const groups = Map.groupBy(entries, ({ link }) =>
-      JSON.stringify([link.projectId, link.worktreePath, link.branch]),
+    const groups = Map.groupBy(entries, ({ project, cwd, branch }) =>
+      JSON.stringify([project.id, cwd, branch]),
     );
     yield* Effect.forEach(
       groups.values(),
       (group) =>
         Effect.gen(function* () {
-          const first = group[0]!.link;
-          const project = projects.get(first.projectId);
-          if (
-            project === undefined ||
-            first.branch === null ||
-            !(yield* fileSystem.exists(first.worktreePath))
-          ) {
+          const { project, cwd, branch } = group[0]!;
+          if (!(yield* fileSystem.exists(cwd))) {
             return;
           }
           const detected = yield* git.branchPullRequest(
-            { cwd: first.worktreePath, branch: first.branch },
+            { cwd, branch },
             { refresh: request.refresh },
           );
           const found =
@@ -141,9 +146,9 @@ export const make = Effect.gen(function* () {
               : null;
           yield* Effect.forEach(
             group,
-            ({ thread, link }) =>
+            ({ thread, checkout }) =>
               Effect.gen(function* () {
-                const previous = link.pullRequest ?? null;
+                const previous = checkout.pullRequest;
                 // A merged or closed pull request stays once its branch is gone.
                 const pullRequest =
                   found ?? (previous !== null && previous.state !== "open" ? previous : null);
@@ -156,17 +161,17 @@ export const make = Effect.gen(function* () {
                 }
                 const uuid = yield* crypto.randomUUIDv4;
                 yield* engine.dispatch({
-                  type: "thread.worktree.sync",
+                  type: "thread.checkout.sync",
                   commandId: CommandId.make(
-                    `server:thread-worktree-pull-request:${thread.id}:${uuid}`,
+                    `server:thread-checkout-pull-request:${thread.id}:${uuid}`,
                   ),
                   threadId: thread.id,
-                  worktreePath: link.worktreePath,
-                  branch: link.branch,
+                  projectId: checkout.projectId,
+                  branch: checkout.branch,
                   pullRequest,
                 });
               }).pipe(
-                // The link changed since the lookup. Its own events requeue it.
+                // The checkout changed since the lookup. Its own events requeue it.
                 Effect.catchTags({ OrchestrationCommandInvariantError: () => Effect.void }),
               ),
             { discard: true },
@@ -175,8 +180,8 @@ export const make = Effect.gen(function* () {
           Effect.catchCause((cause) =>
             Cause.hasInterruptsOnly(cause)
               ? Effect.failCause(cause)
-              : Effect.logWarning("attached worktree pull request lookup failed", {
-                  worktreePath: group[0]!.link.worktreePath,
+              : Effect.logWarning("attached checkout pull request lookup failed", {
+                  cwd: group[0]!.cwd,
                   cause: Cause.pretty(cause),
                 }),
           ),
@@ -387,7 +392,7 @@ export const make = Effect.gen(function* () {
         ),
       { concurrency: 8, discard: true },
     );
-    yield* synchronizeAttachedWorktrees(request, snapshot.threads, projects);
+    yield* synchronizeAttachedCheckouts(request, snapshot.threads, projects);
   });
 
   const worker = yield* makeDrainableWorker((request: RefreshRequest) =>

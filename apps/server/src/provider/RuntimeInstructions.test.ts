@@ -10,10 +10,10 @@ describe("buildRuntimeInstructions", () => {
     expect(instructions).toContain("call list_thread_pull_requests and link any PR");
   });
 
-  it("directs cross-project work into attached worktrees", () => {
+  it("directs cross-project work into attached checkouts", () => {
     const instructions = buildRuntimeInstructions({ harness: "Claude Code" });
-    expect(instructions).toContain("call attach_worktree for that project");
-    expect(instructions).toContain("instead of editing its main checkout");
+    expect(instructions).toContain("call attach_checkout for that project");
+    expect(instructions).toContain("the same kind of workspace this thread uses");
   });
 
   it("keeps known model and effort metadata on one line", () => {

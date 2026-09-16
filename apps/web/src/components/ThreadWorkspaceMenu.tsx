@@ -1,4 +1,4 @@
-import type { OrchestrationThreadShell, ScopedThreadRef } from "@t3tools/contracts";
+import type { OrchestrationThreadShell, ProjectId, ScopedThreadRef } from "@t3tools/contracts";
 import { ChevronDownIcon, FolderGit2Icon, FolderIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -12,7 +12,7 @@ export interface WorkspaceMenuThread {
   readonly ref: ScopedThreadRef;
   readonly shell: Pick<
     OrchestrationThreadShell,
-    "id" | "projectId" | "branch" | "worktreePath" | "worktrees"
+    "id" | "projectId" | "branch" | "worktreePath" | "checkouts"
   >;
 }
 
@@ -45,7 +45,7 @@ function CheckoutItem({
 
 /**
  * A started thread's pinned workspace label, turned into a list of its checkouts
- * once worktrees of other projects are attached. Picking one opens it in the Files
+ * once checkouts of other projects are attached. Picking one opens it in the Files
  * panel, which also manages them; nothing here moves the agent, whose workspace is
  * fixed once the thread starts. Renders `fallback` when there is nothing to list.
  */
@@ -61,25 +61,25 @@ export function ThreadWorkspaceMenu({
   children: ReactNode;
 }) {
   const { ref, shell } = workspaceThread;
-  const checkouts = useThreadCheckouts(ref.environmentId, shell);
-  const { links } = checkouts;
+  const threadCheckouts = useThreadCheckouts(ref.environmentId, shell);
+  const { checkouts } = threadCheckouts;
 
-  if (!checkouts.supported || links.length === 0) return fallback;
+  if (!threadCheckouts.supported || checkouts.length === 0) return fallback;
 
-  const openFiles = (checkoutPath: string | null) =>
-    useRightPanelStore.getState().openFilesCheckout(ref, checkoutPath);
+  const openFiles = (checkoutProjectId: ProjectId | null) =>
+    useRightPanelStore.getState().openFilesCheckout(ref, checkoutProjectId);
 
   return (
     <Menu>
       <MenuTrigger
         render={<Button variant="ghost" size="xs" />}
         className={className}
-        title={`${links.length} attached worktree${links.length === 1 ? "" : "s"}`}
+        title={`${checkouts.length} attached checkout${checkouts.length === 1 ? "" : "s"}`}
         data-composer-context-control
       >
         {children}
         {/* Outside the collapsing label, so a compact strip still shows the count. */}
-        <span className="shrink-0 tabular-nums">+{links.length}</span>
+        <span className="shrink-0 tabular-nums">+{checkouts.length}</span>
         <ChevronDownIcon className="size-3 shrink-0 opacity-50" />
       </MenuTrigger>
       <MenuPopup align="start" side="top" className="w-80" {...composerFloatingLayerProps}>
@@ -87,17 +87,17 @@ export function ThreadWorkspaceMenu({
           <MenuGroupLabel>Open in Files</MenuGroupLabel>
           <CheckoutItem
             localCheckout={shell.worktreePath === null}
-            title={checkouts.projectTitle(shell.projectId)}
+            title={threadCheckouts.projectTitle(shell.projectId)}
             detail={shell.branch ? `Agent workspace · ${shell.branch}` : "Agent workspace"}
             onClick={() => openFiles(null)}
           />
-          {links.map((link) => (
+          {checkouts.map((checkout) => (
             <CheckoutItem
-              key={link.worktreePath}
-              localCheckout={checkouts.isLocalCheckout(link)}
-              title={checkouts.projectTitle(link.projectId)}
-              detail={link.branch}
-              onClick={() => openFiles(link.worktreePath)}
+              key={checkout.projectId}
+              localCheckout={checkout.worktreePath === null}
+              title={threadCheckouts.projectTitle(checkout.projectId)}
+              detail={checkout.branch}
+              onClick={() => openFiles(checkout.projectId)}
             />
           ))}
         </MenuGroup>

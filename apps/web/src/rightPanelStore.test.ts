@@ -1,5 +1,5 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { type EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { type EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import {
@@ -441,14 +441,14 @@ describe("rightPanelStore", () => {
 
   it("remembers which checkout the files surface browses", () => {
     const store = useRightPanelStore.getState();
-    store.openFilesCheckout(refA, "/worktrees/api");
+    store.openFilesCheckout(refA, ProjectId.make("project-api"));
     store.open(refA, "agents");
     store.open(refA, "files");
     expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
       isOpen: true,
       activeSurfaceId: "files",
       surfaces: [
-        { id: "files", kind: "files", checkoutPath: "/worktrees/api" },
+        { id: "files", kind: "files", checkoutProjectId: "project-api" },
         { id: "agents", kind: "agents" },
       ],
     });
@@ -468,7 +468,7 @@ describe("rightPanelStore", () => {
         "env-1:thread-A": {
           isOpen: true,
           activeSurfaceId: "files",
-          surfaces: [{ id: "files", kind: "files", checkoutPath: 42 }],
+          surfaces: [{ id: "files", kind: "files", checkoutProjectId: 42 }],
         },
       },
     });

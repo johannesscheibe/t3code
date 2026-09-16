@@ -37,7 +37,7 @@ import * as Stream from "effect/Stream";
 import { it as effectIt } from "@effect/vitest";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import * as ThreadWorktreeAttach from "../../threadWorktrees/ThreadWorktreeAttach.ts";
+import * as ThreadCheckoutAttach from "../../threadCheckouts/ThreadCheckoutAttach.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import {
   ProjectSetupScriptRunner,
@@ -72,7 +72,7 @@ import {
 } from "../../provider/Services/ProviderService.ts";
 import {
   checkpointRefForThreadTurn,
-  checkpointRefForThreadWorktreeTurn,
+  checkpointRefForThreadCheckoutTurn,
 } from "../../checkpointing/Utils.ts";
 import { ProviderValidationError } from "../../provider/Errors.ts";
 import { ServerConfig } from "../../config.ts";
@@ -504,7 +504,7 @@ describe("CheckpointReactor", () => {
     const setupCalls: ProjectSetupScriptRunnerInput[] = [];
     const removedWorktrees: string[] = [];
     const makeAttach = (store = checkpointStore) =>
-      ThreadWorktreeAttach.make.pipe(
+      ThreadCheckoutAttach.make.pipe(
         Effect.provideService(CheckpointStore.CheckpointStore, store),
         Effect.provideService(OrchestrationEngineService, engine),
         Effect.provideService(ProjectionSnapshotQuery, snapshotQuery),
@@ -1987,7 +1987,7 @@ describe("CheckpointReactor", () => {
           ),
       });
       const pending = yield* attach(
-        { threadId: ThreadId.make("thread-1"), projectId, worktreePath: libraryCwd },
+        { threadId: ThreadId.make("thread-1"), projectId, target: { type: "local" } },
         "agent",
       ).pipe(
         Effect.tap(() =>
@@ -2000,21 +2000,16 @@ describe("CheckpointReactor", () => {
       yield* Deferred.await(started);
       try {
         expect(pending.pollUnsafe()).toBeUndefined();
-        expect((yield* Effect.promise(harness.readModel)).threads[0]?.worktrees ?? []).toEqual([]);
+        expect((yield* Effect.promise(harness.readModel)).threads[0]?.checkouts).toEqual([]);
       } finally {
         yield* Deferred.succeed(release, undefined);
         yield* Fiber.join(pending);
       }
-      const { link } = yield* Fiber.join(pending);
+      const { checkout } = yield* Fiber.join(pending);
       expect(
         gitShowFileAtRef(
           libraryCwd,
-          checkpointRefForThreadWorktreeTurn(
-            ThreadId.make("thread-1"),
-            libraryCwd,
-            0,
-            link.checkpointId,
-          ),
+          checkpointRefForThreadCheckoutTurn(ThreadId.make("thread-1"), checkout.checkpointId, 0),
           "README.md",
         ),
       ).toBe("v1\n");
@@ -2044,13 +2039,14 @@ describe("CheckpointReactor", () => {
           {
             threadId: ThreadId.make("thread-1"),
             projectId,
-            runSetupScript: true,
-            ...(createNew ? { branch: "feature" } : { worktreePath: libraryCwd }),
+            target: createNew
+              ? { type: "new-worktree", branch: "feature", runSetupScript: true }
+              : { type: "local" },
           },
           "agent",
         ).pipe(Effect.flip);
-        expect(error._tag).toBe("ThreadWorktreeAttachError");
-        expect((yield* Effect.promise(harness.readModel)).threads[0]?.worktrees ?? []).toEqual([]);
+        expect(error._tag).toBe("ThreadCheckoutAttachError");
+        expect((yield* Effect.promise(harness.readModel)).threads[0]?.checkouts).toEqual([]);
         expect(harness.setupCalls).toEqual([]);
         expect(harness.removedWorktrees).toEqual(
           createNew ? [NodePath.join(libraryCwd, "test-worktree")] : [],
@@ -2086,28 +2082,28 @@ describe("CheckpointReactor", () => {
       });
 
       const attach = yield* harness.makeAttach();
-      const first = yield* attach({ threadId, projectId, worktreePath: libraryCwd }, "manual");
+      const first = yield* attach({ threadId, projectId, target: { type: "local" } }, "manual");
       yield* harness.engine.dispatch({
-        type: "thread.worktree.detach",
+        type: "thread.checkout.detach",
         commandId: CommandId.make("cmd-detach-before-reattach"),
         threadId,
-        worktreePath: libraryCwd,
+        projectId,
       });
       NodeFS.writeFileSync(NodePath.join(libraryCwd, "README.md"), "changed while detached\n");
-      const second = yield* attach({ threadId, projectId, worktreePath: libraryCwd }, "manual");
+      const second = yield* attach({ threadId, projectId, target: { type: "local" } }, "manual");
 
-      expect(second.link.checkpointId).not.toBe(first.link.checkpointId);
+      expect(second.checkout.checkpointId).not.toBe(first.checkout.checkpointId);
       expect(
         gitShowFileAtRef(
           libraryCwd,
-          checkpointRefForThreadWorktreeTurn(threadId, libraryCwd, 1, first.link.checkpointId),
+          checkpointRefForThreadCheckoutTurn(threadId, first.checkout.checkpointId, 1),
           "README.md",
         ),
       ).toBe("v1\n");
       expect(
         gitShowFileAtRef(
           libraryCwd,
-          checkpointRefForThreadWorktreeTurn(threadId, libraryCwd, 1, second.link.checkpointId),
+          checkpointRefForThreadCheckoutTurn(threadId, second.checkout.checkpointId, 1),
           "README.md",
         ),
       ).toBe("changed while detached\n");
@@ -2146,17 +2142,21 @@ describe("CheckpointReactor", () => {
         const projectId = yield* Effect.promise(() => harness.registerAttachedProject(libraryCwd));
         const attach = yield* harness.makeAttach();
         const threadId = ThreadId.make("thread-1");
-        const error = yield* attach({ threadId, projectId, worktreePath: otherCwd }, "manual").pipe(
-          Effect.flip,
-        );
+        const error = yield* attach(
+          { threadId, projectId, target: { type: "existing", path: otherCwd } },
+          "manual",
+        ).pipe(Effect.flip);
         expect(error.message).toContain("does not belong");
-        expect((yield* Effect.promise(harness.readModel)).threads[0]?.worktrees ?? []).toEqual([]);
+        expect((yield* Effect.promise(harness.readModel)).threads[0]?.checkouts).toEqual([]);
         const linked = NodePath.join(libraryCwd, "linked");
         runGit(libraryCwd, ["worktree", "add", "-b", "linked", linked]);
         const subdir = NodePath.join(linked, "src");
         NodeFS.mkdirSync(subdir);
-        const result = yield* attach({ threadId, projectId, worktreePath: subdir }, "manual");
-        expect(result.link.worktreePath).toBe(NodeFS.realpathSync(linked));
+        const result = yield* attach(
+          { threadId, projectId, target: { type: "existing", path: subdir } },
+          "manual",
+        );
+        expect(result.checkout.worktreePath).toBe(NodeFS.realpathSync(linked));
       }),
   );
 
@@ -2172,16 +2172,20 @@ describe("CheckpointReactor", () => {
         const projectId = yield* Effect.promise(() => harness.registerAttachedProject(libraryCwd));
         const attach = yield* harness.makeAttach();
         const error = yield* attach(
-          { threadId: ThreadId.make("thread-1"), projectId, branch: "feature" },
+          {
+            threadId: ThreadId.make("thread-1"),
+            projectId,
+            target: { type: "new-worktree", branch: "feature" },
+          },
           "agent",
         ).pipe(Effect.flip);
-        expect(error.message).toContain("requires a Git primary workspace");
+        expect(error.message).toContain("requires a Git workspace");
         expect(NodeFS.existsSync(NodePath.join(libraryCwd, "test-worktree"))).toBe(false);
-        expect((yield* Effect.promise(harness.readModel)).threads[0]?.worktrees ?? []).toEqual([]);
+        expect((yield* Effect.promise(harness.readModel)).threads[0]?.checkouts).toEqual([]);
       }),
   );
 
-  effectIt.effect("keeps a symlinked registered project-root path on its attachment", () =>
+  effectIt.effect("records an existing path to the project's own checkout as local", () =>
     Effect.gen(function* () {
       const harness = yield* Effect.promise(() => createHarness());
       const libraryCwd = createGitRepository();
@@ -2195,12 +2199,12 @@ describe("CheckpointReactor", () => {
         {
           threadId: ThreadId.make("thread-1"),
           projectId,
-          worktreePath: libraryCwd,
+          target: { type: "existing", path: libraryCwd },
         },
         "manual",
       );
 
-      expect(result.link.worktreePath).toBe(alias);
+      expect(result.checkout.worktreePath).toBeNull();
     }),
   );
 
@@ -2216,8 +2220,7 @@ describe("CheckpointReactor", () => {
           {
             threadId: ThreadId.make("thread-1"),
             projectId,
-            branch: "feature",
-            runSetupScript: true,
+            target: { type: "new-worktree", branch: "feature", runSetupScript: true },
           },
           "agent",
         );
@@ -2231,7 +2234,7 @@ describe("CheckpointReactor", () => {
   );
 
   effectIt.effect(
-    "reverts an attached worktree to its baseline from when the thread attached it",
+    "reverts an attached checkout to its baseline from when the thread attached it",
     () =>
       Effect.gen(function* () {
         const harness = yield* Effect.promise(() =>
@@ -2272,11 +2275,14 @@ describe("CheckpointReactor", () => {
 
         const projectId = yield* Effect.promise(() => harness.registerAttachedProject(libraryCwd));
         const attach = yield* harness.makeAttach();
-        const { link } = yield* attach({ threadId, projectId, worktreePath: libraryCwd }, "agent");
+        const { checkout } = yield* attach(
+          { threadId, projectId, target: { type: "local" } },
+          "agent",
+        );
         expect(
           gitShowFileAtRef(
             libraryCwd,
-            checkpointRefForThreadWorktreeTurn(threadId, libraryCwd, 1, link.checkpointId),
+            checkpointRefForThreadCheckoutTurn(threadId, checkout.checkpointId, 1),
             "README.md",
           ),
         ).toBe("v1\n");
@@ -2317,7 +2323,7 @@ describe("CheckpointReactor", () => {
         expect(
           gitRefExists(
             libraryCwd,
-            checkpointRefForThreadWorktreeTurn(threadId, libraryCwd, 1, link.checkpointId),
+            checkpointRefForThreadCheckoutTurn(threadId, checkout.checkpointId, 1),
           ),
         ).toBe(false);
       }),

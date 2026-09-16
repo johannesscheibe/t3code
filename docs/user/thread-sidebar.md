@@ -22,25 +22,28 @@ worktree**, each background submission creates its own worktree.
 
 ## Work across repositories
 
-When a task needs changes in another project, attach a worktree of that project to the
+When a task needs changes in another project, attach a checkout of that project to the
 thread. On web and desktop, open the checkout selector at the top of the Files panel and
-choose **Attach worktree…**. T3 Code creates a worktree on a new branch, named after the
-thread's branch by default, or attaches an existing checkout path you enter. Agents can also
-attach one when their work reaches another project.
+choose **Attach checkout…**. As with a new thread, you can work in the project's **Local
+checkout**, create a **New worktree** on a new branch (named after the thread's branch by
+default), or enter an **Existing path** to a checkout of the project's repository. The
+dialog starts with the kind of workspace the thread itself uses. Agents can also attach a
+checkout when their work reaches another project, and they pick the same kind unless you
+ask for another.
 
-The thread must start in a Git workspace, and an existing checkout must belong to the
-selected project. A thread can have one worktree per project. The agent can write to a
-newly attached worktree from its next message. Checkpoints and revert include attached
-worktrees. Once the thread has started, the workspace label in the composer shows how many
+The thread must start in a Git workspace. A thread can have one checkout per project. The
+agent can write to a newly attached checkout from its next message. Checkpoints and revert
+include attached checkouts, so reverting also resets a local checkout that other threads
+work in. Once the thread has started, the workspace label in the composer shows how many
 are attached, for example **Worktree +1**; select it to open a checkout in the Files panel.
 In the Files and diff panels, use the selector at the top to switch between repositories.
-With an attached worktree selected in the Files panel, its selector opens the pull request
-for that worktree's branch. On mobile, those pull requests appear in the thread's Git sheet.
+With an attached checkout selected in the Files panel, its selector opens the pull request
+for that checkout's branch. On mobile, those pull requests appear in the thread's Git sheet.
 
-To stop working in a repository, select it in the Files panel selector and choose **Detach worktree**. If no
-other thread uses the worktree and it is not a registered project root, you can delete
-it at the same time. Deleting a thread offers the same for its attached worktrees. Attaching requires an up-to-date T3 Code
-server.
+To stop working in a repository, select it in the Files panel selector and choose **Detach
+checkout**. If the checkout is a worktree that no other thread uses and that is not a registered
+project root, you can delete it at the same time. Deleting a thread offers the same for its attached worktrees. Attaching requires an
+up-to-date T3 Code server.
 
 ## Pin and reorder threads
 

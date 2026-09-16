@@ -39,6 +39,7 @@ const baseThread: OrchestrationThread = {
   settledOverride: null,
   settledAt: null,
   pullRequests: [],
+  checkouts: [],
   deletedAt: null,
   messages: [],
   proposedPlans: [],

@@ -12,7 +12,6 @@ import {
   type RuntimeMode,
   type TurnId,
 } from "@t3tools/contracts";
-import { threadWorktrees } from "@t3tools/shared/threadWorktrees";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
@@ -359,7 +358,7 @@ const make = Effect.gen(function* () {
     );
 
   const threadModelSelections = new Map<string, ModelSelection>();
-  // Attached worktrees each thread's session started with. Adapters take extra
+  // Attached checkout directories each thread's session started with. Adapters take extra
   // directories only at session start, so a different set restarts the session.
   const threadSessionDirectories = new Map<string, string>();
   const compactingThreadIds = new Set<ThreadId>();
@@ -807,7 +806,12 @@ const make = Effect.gen(function* () {
       thread,
       projects: project ? [project] : [],
     });
-    const additionalDirectories = threadWorktrees(thread).map((link) => link.worktreePath);
+    const additionalDirectories: Array<string> = [];
+    for (const checkout of thread.checkouts) {
+      const directory =
+        checkout.worktreePath ?? (yield* resolveProject(checkout.projectId))?.workspaceRoot;
+      if (directory !== undefined) additionalDirectories.push(directory);
+    }
     const directoriesKey = additionalDirectories.toSorted().join("\n");
     const refreshWorkspaceSnapshot = effectiveCwd
       ? providerRegistry

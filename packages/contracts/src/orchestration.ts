@@ -32,11 +32,10 @@ import {
   PullRequestState,
 } from "./pullRequest.ts";
 import {
-  ThreadWorktreeKey,
-  ThreadWorktreeLink,
-  ThreadWorktreeLinkSource,
-  ThreadWorktreePullRequest,
-} from "./threadWorktree.ts";
+  ThreadCheckout,
+  ThreadCheckoutPullRequest,
+  ThreadCheckoutSource,
+} from "./threadCheckout.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
@@ -725,10 +724,9 @@ export const OrchestrationThread = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
-  // Worktrees attached beside the primary workspace. Optional so payloads
-  // from pre-attach servers, and thread literals written before the field
-  // existed, still decode; read through `threadWorktrees()` from shared.
-  worktrees: Schema.optional(Schema.Array(ThreadWorktreeLink)),
+  // Checkouts of other projects attached beside the thread's own workspace.
+  // Defaulted so payloads from pre-attach servers still decode.
+  checkouts: Schema.Array(ThreadCheckout).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -814,10 +812,9 @@ export const OrchestrationThreadShell = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
-  // Worktrees attached beside the primary workspace. Optional so payloads
-  // from pre-attach servers, and thread literals written before the field
-  // existed, still decode; read through `threadWorktrees()` from shared.
-  worktrees: Schema.optional(Schema.Array(ThreadWorktreeLink)),
+  // Checkouts of other projects attached beside the thread's own workspace.
+  // Defaulted so payloads from pre-attach servers still decode.
+  checkouts: Schema.Array(ThreadCheckout).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -1182,33 +1179,33 @@ const ThreadPullRequestUnlinkCommand = Schema.Struct({
   ...ThreadPullRequestKey.fields,
 });
 
-const ThreadWorktreeAttachCommand = Schema.Struct({
-  type: Schema.Literal("thread.worktree.attach"),
+const ThreadCheckoutAttachCommand = Schema.Struct({
+  type: Schema.Literal("thread.checkout.attach"),
   commandId: CommandId,
   threadId: ThreadId,
-  ...ThreadWorktreeKey.fields,
   projectId: ProjectId,
-  branch: Schema.NullOr(TrimmedNonEmptyString),
-  source: ThreadWorktreeLinkSource,
-  checkpointId: ThreadWorktreeLink.fields.checkpointId,
+  worktreePath: ThreadCheckout.fields.worktreePath,
+  branch: ThreadCheckout.fields.branch,
+  source: ThreadCheckoutSource,
+  checkpointId: ThreadCheckout.fields.checkpointId,
 });
 
-const ThreadWorktreeDetachCommand = Schema.Struct({
-  type: Schema.Literal("thread.worktree.detach"),
+const ThreadCheckoutDetachCommand = Schema.Struct({
+  type: Schema.Literal("thread.checkout.detach"),
   commandId: CommandId,
   threadId: ThreadId,
-  ...ThreadWorktreeKey.fields,
+  projectId: ProjectId,
 });
 
-// Server-only: records an attached worktree's checked-out branch and the pull
+// Server-only: records an attached checkout's checked-out branch and the pull
 // request detected for it.
-const ThreadWorktreeSyncCommand = Schema.Struct({
-  type: Schema.Literal("thread.worktree.sync"),
+const ThreadCheckoutSyncCommand = Schema.Struct({
+  type: Schema.Literal("thread.checkout.sync"),
   commandId: CommandId,
   threadId: ThreadId,
-  ...ThreadWorktreeKey.fields,
-  branch: Schema.NullOr(TrimmedNonEmptyString),
-  pullRequest: Schema.NullOr(ThreadWorktreePullRequest),
+  projectId: ProjectId,
+  branch: ThreadCheckout.fields.branch,
+  pullRequest: Schema.NullOr(ThreadCheckoutPullRequest),
 });
 
 const ThreadRuntimeModeSetCommand = Schema.Struct({
@@ -1380,7 +1377,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadMetaUpdateCommand,
   ThreadPullRequestLinkCommand,
   ThreadPullRequestUnlinkCommand,
-  ThreadWorktreeDetachCommand,
+  ThreadCheckoutDetachCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
   ThreadTurnStartCommand,
@@ -1414,7 +1411,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadMetaUpdateCommand,
   ThreadPullRequestLinkCommand,
   ThreadPullRequestUnlinkCommand,
-  ThreadWorktreeDetachCommand,
+  ThreadCheckoutDetachCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
   ClientThreadTurnStartCommand,
@@ -1544,9 +1541,9 @@ const ThreadPullRequestLinkSyncCommand = Schema.Struct({
 const InternalOrchestrationCommand = Schema.Union([
   ThreadAutoSettleCommand,
   // Server-only: attaching validates the checkout on disk first, so clients
-  // go through the vcs.attachThreadWorktree RPC instead.
-  ThreadWorktreeAttachCommand,
-  ThreadWorktreeSyncCommand,
+  // go through the vcs.attachThreadCheckout RPC instead.
+  ThreadCheckoutAttachCommand,
+  ThreadCheckoutSyncCommand,
   ThreadPullRequestSyncCommand,
   ThreadPullRequestLinkSyncCommand,
   ThreadSessionSetCommand,
@@ -1588,8 +1585,8 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.pull-request-linked",
   "thread.pull-request-unlinked",
   "thread.pull-request-synced",
-  "thread.worktree-attached",
-  "thread.worktree-detached",
+  "thread.checkout-attached",
+  "thread.checkout-detached",
   "thread.runtime-mode-set",
   "thread.interaction-mode-set",
   "thread.message-sent",
@@ -1770,19 +1767,19 @@ export const ThreadPullRequestSyncedPayload = Schema.Struct({
 });
 export type ThreadPullRequestSyncedPayload = typeof ThreadPullRequestSyncedPayload.Type;
 
-export const ThreadWorktreeAttachedPayload = Schema.Struct({
+export const ThreadCheckoutAttachedPayload = Schema.Struct({
   threadId: ThreadId,
-  link: ThreadWorktreeLink,
+  checkout: ThreadCheckout,
   updatedAt: IsoDateTime,
 });
-export type ThreadWorktreeAttachedPayload = typeof ThreadWorktreeAttachedPayload.Type;
+export type ThreadCheckoutAttachedPayload = typeof ThreadCheckoutAttachedPayload.Type;
 
-export const ThreadWorktreeDetachedPayload = Schema.Struct({
+export const ThreadCheckoutDetachedPayload = Schema.Struct({
   threadId: ThreadId,
-  ...ThreadWorktreeKey.fields,
+  projectId: ProjectId,
   updatedAt: IsoDateTime,
 });
-export type ThreadWorktreeDetachedPayload = typeof ThreadWorktreeDetachedPayload.Type;
+export type ThreadCheckoutDetachedPayload = typeof ThreadCheckoutDetachedPayload.Type;
 
 export const ThreadRuntimeModeSetPayload = Schema.Struct({
   threadId: ThreadId,
@@ -2016,13 +2013,13 @@ export const OrchestrationEvent = Schema.Union([
   }),
   Schema.Struct({
     ...EventBaseFields,
-    type: Schema.Literal("thread.worktree-attached"),
-    payload: ThreadWorktreeAttachedPayload,
+    type: Schema.Literal("thread.checkout-attached"),
+    payload: ThreadCheckoutAttachedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
-    type: Schema.Literal("thread.worktree-detached"),
-    payload: ThreadWorktreeDetachedPayload,
+    type: Schema.Literal("thread.checkout-detached"),
+    payload: ThreadCheckoutDetachedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
@@ -2179,8 +2176,8 @@ export type DispatchResult = typeof DispatchResult.Type;
 export const OrchestrationGetTurnDiffInput = TurnCountRange.mapFields(
   Struct.assign({
     threadId: ThreadId,
-    // An attached worktree to diff instead of the thread's primary workspace.
-    worktreePath: Schema.optionalKey(TrimmedNonEmptyString),
+    // The project of an attached checkout to diff instead of the thread's own workspace.
+    checkoutProjectId: Schema.optionalKey(ProjectId),
     ignoreWhitespace: Schema.optionalKey(Schema.Boolean),
   }),
   { unsafePreserveChecks: true },
@@ -2193,7 +2190,7 @@ export type OrchestrationGetTurnDiffResult = typeof OrchestrationGetTurnDiffResu
 export const OrchestrationGetFullThreadDiffInput = Schema.Struct({
   threadId: ThreadId,
   toTurnCount: NonNegativeInt,
-  worktreePath: Schema.optionalKey(TrimmedNonEmptyString),
+  checkoutProjectId: Schema.optionalKey(ProjectId),
   ignoreWhitespace: Schema.optionalKey(Schema.Boolean),
 });
 export type OrchestrationGetFullThreadDiffInput = typeof OrchestrationGetFullThreadDiffInput.Type;
