@@ -8,11 +8,11 @@ import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
-layer("055_ProjectionThreadCheckouts", (it) => {
+layer("052_ProjectionThreadCheckouts", (it) => {
   it.effect("keys checkouts by thread and project, with a nullable worktree path", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 55 });
+      yield* runMigrations({ toMigrationInclusive: 52 });
 
       yield* sql`
         INSERT INTO projection_thread_checkouts

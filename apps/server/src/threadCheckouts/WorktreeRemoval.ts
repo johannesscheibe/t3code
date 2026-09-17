@@ -7,7 +7,11 @@ import * as Schema from "effect/Schema";
 import { GitWorkflowService } from "../git/GitWorkflowService.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 
-/** Protect registered project roots at the removal boundary, including filesystem aliases. */
+/**
+ * Protect registered project roots and worktrees a thread still uses at the removal
+ * boundary, including filesystem aliases. Archived threads count: clients never
+ * load them, so only the server can see that one still needs its workspace.
+ */
 export const make = Effect.gen(function* () {
   const git = yield* GitWorkflowService;
   const snapshots = yield* ProjectionSnapshotQuery;
@@ -45,6 +49,27 @@ export const make = Effect.gen(function* () {
         ) {
           return yield* failure(
             "Cannot remove a registered project's workspace. Remove the project registration first.",
+          );
+        }
+      }
+      const threads = [
+        ...(yield* snapshots.getShellSnapshot()).threads,
+        ...(yield* snapshots.getArchivedShellSnapshot()).threads,
+      ];
+      const usedPaths = new Set(
+        threads.flatMap((thread) => [
+          thread.worktreePath,
+          ...thread.checkouts.map((checkout) => checkout.worktreePath),
+        ]),
+      );
+      for (const usedPath of usedPaths) {
+        if (usedPath === null) continue;
+        if (
+          path.resolve(usedPath) === requestedPath ||
+          (target !== null && (yield* existingRealPath(usedPath)) === target)
+        ) {
+          return yield* failure(
+            "A thread still uses this worktree. Delete the thread or detach the checkout first.",
           );
         }
       }

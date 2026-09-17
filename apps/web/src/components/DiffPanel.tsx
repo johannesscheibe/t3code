@@ -33,7 +33,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCodeViewFileReveal } from "./diffs/useCodeViewFileReveal";
 import { useOpenInPreferredEditor } from "../editorPreferences";
 import { type DraftId } from "../composerDraftStore";
-import { openDiffFilePrimaryAction } from "../diffFileActions";
+import { openDiffFilePrimaryAction, resolveDiffPathForWorkspace } from "../diffFileActions";
+import { useRightPanelStore } from "../rightPanelStore";
 import { useCheckpointDiff } from "~/lib/checkpointDiffState";
 import { cn } from "~/lib/utils";
 import { selectThreadDiffPanelSelection, useDiffPanelStore } from "../diffPanelStore";
@@ -571,10 +572,23 @@ export default function DiffPanel({
 
   const openDiffFile = useCallback(
     (filePath: string) => {
+      // The file panel opens an attached checkout's file by absolute path, which
+      // ChatView maps back to that checkout. It works in every client, unlike an editor.
+      if (selectedCheckout !== null && routeThreadRef && activeCwd) {
+        const workspaceFilePath = resolveDiffPathForWorkspace({
+          filePath,
+          workspaceRoot: activeCwd,
+          repositoryRoot: activeRepositoryRoot,
+        });
+        if (workspaceFilePath) {
+          useRightPanelStore
+            .getState()
+            .openFile(routeThreadRef, `${activeCwd}/${workspaceFilePath}`);
+        }
+        return;
+      }
       openDiffFilePrimaryAction({
-        // The thread's file panel reads its own workspace. A file from an
-        // attached checkout opens in the editor by absolute path instead.
-        threadRef: selectedCheckout === null ? routeThreadRef : null,
+        threadRef: routeThreadRef,
         filePath,
         activeCwd,
         repositoryRoot: activeRepositoryRoot,
@@ -1084,6 +1098,9 @@ export default function DiffPanel({
                     sectionId={reviewSectionId}
                     sectionTitle={reviewSectionTitle}
                     composerDraftTarget={composerDraftTarget}
+                    {...(selectedCheckout !== null && activeCwd
+                      ? { commentPathRoot: activeCwd }
+                      : {})}
                     renderHeaderFilenameSuffix={(fileDiff) => (
                       <DiffFilePathCopyButton filePath={resolveFileDiffPath(fileDiff)} />
                     )}

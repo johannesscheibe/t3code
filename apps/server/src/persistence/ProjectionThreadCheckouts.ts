@@ -21,11 +21,6 @@ export const ProjectionThreadCheckoutDbRow = ProjectionThreadCheckout.mapFields(
   }),
 );
 
-export const ListProjectionThreadCheckoutsInput = Schema.Struct({
-  threadId: ThreadId,
-});
-export type ListProjectionThreadCheckoutsInput = typeof ListProjectionThreadCheckoutsInput.Type;
-
 export const DeleteProjectionThreadCheckoutInput = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
@@ -43,13 +38,6 @@ export class ProjectionThreadCheckoutRepository extends Context.Service<
     readonly upsert: (
       row: ProjectionThreadCheckout,
     ) => Effect.Effect<void, ProjectionRepositoryError>;
-    readonly listAll: () => Effect.Effect<
-      ReadonlyArray<ProjectionThreadCheckout>,
-      ProjectionRepositoryError
-    >;
-    readonly listByThreadId: (
-      input: ListProjectionThreadCheckoutsInput,
-    ) => Effect.Effect<ReadonlyArray<ProjectionThreadCheckout>, ProjectionRepositoryError>;
     readonly delete: (
       input: DeleteProjectionThreadCheckoutInput,
     ) => Effect.Effect<void, ProjectionRepositoryError>;
@@ -97,43 +85,6 @@ export const make = Effect.gen(function* () {
     `,
   });
 
-  const listAllRows = SqlSchema.findAll({
-    Request: Schema.Void,
-    Result: ProjectionThreadCheckoutDbRow,
-    execute: () => sql`
-      SELECT
-        thread_id AS "threadId",
-        project_id AS "projectId",
-        worktree_path AS "worktreePath",
-        branch,
-        pull_request_json AS "pullRequest",
-        source,
-        attached_at AS "attachedAt",
-        checkpoint_id AS "checkpointId"
-      FROM projection_thread_checkouts
-      ORDER BY thread_id ASC, attached_at ASC, project_id ASC
-    `,
-  });
-
-  const listRowsByThread = SqlSchema.findAll({
-    Request: ListProjectionThreadCheckoutsInput,
-    Result: ProjectionThreadCheckoutDbRow,
-    execute: ({ threadId }) => sql`
-      SELECT
-        thread_id AS "threadId",
-        project_id AS "projectId",
-        worktree_path AS "worktreePath",
-        branch,
-        pull_request_json AS "pullRequest",
-        source,
-        attached_at AS "attachedAt",
-        checkpoint_id AS "checkpointId"
-      FROM projection_thread_checkouts
-      WHERE thread_id = ${threadId}
-      ORDER BY attached_at ASC, project_id ASC
-    `,
-  });
-
   const deleteRow = SqlSchema.void({
     Request: DeleteProjectionThreadCheckoutInput,
     execute: ({ threadId, projectId }) => sql`
@@ -156,18 +107,6 @@ export const make = Effect.gen(function* () {
       Effect.mapError(toPersistenceSqlError("ProjectionThreadCheckoutRepository.upsert:query")),
     );
 
-  const listAll: ProjectionThreadCheckoutRepository["Service"]["listAll"] = () =>
-    listAllRows(undefined).pipe(
-      Effect.mapError(toPersistenceSqlError("ProjectionThreadCheckoutRepository.listAll:query")),
-    );
-
-  const listByThreadId: ProjectionThreadCheckoutRepository["Service"]["listByThreadId"] = (input) =>
-    listRowsByThread(input).pipe(
-      Effect.mapError(
-        toPersistenceSqlError("ProjectionThreadCheckoutRepository.listByThreadId:query"),
-      ),
-    );
-
   const deleteCheckout: ProjectionThreadCheckoutRepository["Service"]["delete"] = (input) =>
     deleteRow(input).pipe(
       Effect.mapError(toPersistenceSqlError("ProjectionThreadCheckoutRepository.delete:query")),
@@ -184,8 +123,6 @@ export const make = Effect.gen(function* () {
 
   return {
     upsert,
-    listAll,
-    listByThreadId,
     delete: deleteCheckout,
     deleteByThreadId,
   } satisfies ProjectionThreadCheckoutRepository["Service"];

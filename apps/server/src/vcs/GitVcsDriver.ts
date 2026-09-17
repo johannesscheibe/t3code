@@ -10,6 +10,7 @@ import * as Path from "effect/Path";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
+  CheckpointRef,
   GitCommandError,
   VcsProcessExitError,
   type VcsSwitchRefInput,
@@ -827,6 +828,20 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     hasCheckpointRef: (input) =>
       resolveCheckpointCommit(input.cwd, input.checkpointRef).pipe(
         Effect.map((commit) => commit !== null),
+      ),
+
+    listCheckpointRefs: (input) =>
+      execute({
+        operation: "GitVcsDriver.checkpoints.listCheckpointRefs",
+        cwd: input.cwd,
+        args: ["for-each-ref", "--format=%(refname)", input.prefix],
+      }).pipe(
+        Effect.map((result) =>
+          result.stdout
+            .split("\n")
+            .filter((line) => line.length > 0)
+            .map((line) => CheckpointRef.make(line)),
+        ),
       ),
 
     restoreCheckpoint: Effect.fn("GitVcsDriver.checkpoints.restoreCheckpoint")(function* (input) {

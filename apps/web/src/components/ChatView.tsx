@@ -8864,7 +8864,7 @@ export default function ChatView(props: ChatViewProps) {
             pendingFileSurfaceIds.has(renderedRightPanelSurface.id)
           }
           workspaceMutationId={workspaceMutationId}
-          {...(activeThread && activeProject
+          {...(isServerThread && activeThread && activeProject
             ? {
                 headerSlot: (
                   <FileCheckoutSwitcher

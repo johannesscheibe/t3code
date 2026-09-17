@@ -181,7 +181,12 @@ export const make = Effect.gen(function* () {
               path: null,
             })
             .pipe(
-              Effect.mapError(attachFailure(`Could not create a worktree of ${project.title}.`)),
+              // Git's reason is the way out, such as a branch name that already exists.
+              Effect.mapError((cause) =>
+                attachFailure(`Could not create a worktree of ${project.title}: ${cause.detail}`)(
+                  cause,
+                ),
+              ),
             );
           return {
             worktreePath: created.worktree.path,

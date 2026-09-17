@@ -1198,12 +1198,14 @@ const ThreadCheckoutDetachCommand = Schema.Struct({
 });
 
 // Server-only: records an attached checkout's checked-out branch and the pull
-// request detected for it.
+// request detected for it. A pull request lookup passes the branch it looked up,
+// so a result for a branch the checkout has since left is rejected.
 const ThreadCheckoutSyncCommand = Schema.Struct({
   type: Schema.Literal("thread.checkout.sync"),
   commandId: CommandId,
   threadId: ThreadId,
   projectId: ProjectId,
+  expectedBranch: Schema.optional(ThreadCheckout.fields.branch),
   branch: ThreadCheckout.fields.branch,
   pullRequest: Schema.NullOr(ThreadCheckoutPullRequest),
 });

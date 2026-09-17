@@ -497,9 +497,35 @@ export const BranchToolbar = memo(function BranchToolbar({
       draftThreadEnvMode: draftThread?.envMode,
     });
   const envModeLocked = envLocked || (serverThread !== null && activeWorktreePath !== null);
+  // The shell changes identity throughout a turn. The menu reads only these fields,
+  // so the memoized selector below keeps its props while a turn streams.
+  const serverThreadId = serverThread?.id;
+  const serverThreadProjectId = serverThread?.projectId;
+  const serverThreadBranch = serverThread?.branch ?? null;
+  const serverThreadWorktreePath = serverThread?.worktreePath ?? null;
+  const serverThreadCheckouts = serverThread?.checkouts;
   const workspaceThread = useMemo(
-    () => (serverThread ? { ref: threadRef, shell: serverThread } : null),
-    [serverThread, threadRef],
+    () =>
+      serverThreadId && serverThreadProjectId && serverThreadCheckouts
+        ? {
+            ref: threadRef,
+            shell: {
+              id: serverThreadId,
+              projectId: serverThreadProjectId,
+              branch: serverThreadBranch,
+              worktreePath: serverThreadWorktreePath,
+              checkouts: serverThreadCheckouts,
+            },
+          }
+        : null,
+    [
+      serverThreadBranch,
+      serverThreadCheckouts,
+      serverThreadId,
+      serverThreadProjectId,
+      serverThreadWorktreePath,
+      threadRef,
+    ],
   );
 
   // "Previous worktree" hops a draft into the most recently active worktree

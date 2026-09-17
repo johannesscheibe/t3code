@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
+import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { readLocalApi } from "~/localApi";
 import { cn } from "~/lib/utils";
 import { AttachCheckoutDialog, useThreadCheckouts } from "../threadCheckouts";
@@ -22,6 +23,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../ui/menu";
+import { toastManager } from "../ui/toast";
 
 /**
  * Picks which checkout the Files tab browses: the thread's workspace or an
@@ -44,6 +46,18 @@ export function FileCheckoutSwitcher({
 }) {
   const threadCheckouts = useThreadCheckouts(environmentId, thread);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{ path: string }>({
+    onCopy: (ctx) => {
+      toastManager.add({ type: "success", title: "Path copied", description: ctx.path });
+    },
+    onError: (error) => {
+      toastManager.add({
+        type: "error",
+        title: "Failed to copy path",
+        description: error.message,
+      });
+    },
+  });
   const { checkouts, attachableProjects } = threadCheckouts;
   const selectedCheckout =
     checkouts.find((checkout) => checkout.projectId === selectedProjectId) ?? null;
@@ -132,7 +146,9 @@ export function FileCheckoutSwitcher({
               ) : null}
               {selectedDirectory !== null ? (
                 <DropdownMenuItem
-                  onClick={() => void navigator.clipboard.writeText(selectedDirectory)}
+                  onClick={() =>
+                    copyPathToClipboard(selectedDirectory, { path: selectedDirectory })
+                  }
                 >
                   <CopyIcon className="size-3.5" />
                   Copy path

@@ -26,7 +26,9 @@ import { parseTurnDiffFilesFromNumstat } from "../../checkpointing/Diffs.ts";
 import {
   checkpointRefForThreadCheckoutTurn,
   checkpointRefForThreadTurn,
+  checkpointRefPrefixForThreadCheckout,
   resolveThreadWorkspaceCwd,
+  turnCountsOfCheckpointRefs,
 } from "../../checkpointing/Utils.ts";
 import * as CheckpointStore from "../../checkpointing/CheckpointStore.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
@@ -275,7 +277,18 @@ const make = Effect.gen(function* () {
               threadId: input.threadId,
               cwd,
               detail: error.message,
-            }),
+            }).pipe(
+              Effect.andThen(nowIso),
+              Effect.flatMap((createdAt) =>
+                appendCaptureFailureActivity({
+                  threadId: input.threadId,
+                  turnId: null,
+                  detail: `Attached checkout ${cwd}: ${error.message}`,
+                  createdAt,
+                }),
+              ),
+              Effect.catch(() => Effect.void),
+            ),
           ),
         ),
       { discard: true },
@@ -924,32 +937,51 @@ const make = Effect.gen(function* () {
       // reflects the reverted filesystem state.
       yield* workspaceEntries.refresh(checkpointCwd);
 
-      // Attached checkouts return to the same turn. One attached after that turn
-      // has no ref for it and returns to its first ref instead: its state when
-      // the thread attached it. The thread's own workspace is already restored,
-      // so a broken attachment is reported and the revert still completes.
+      // Attached checkouts return to their latest ref at or before the turn. One
+      // attached after that turn has none and returns to its first ref instead, its
+      // state when the thread attached it, which then becomes its ref for the turn.
+      // The thread's own workspace is already restored, so a broken attachment is
+      // reported and the revert still completes.
       for (const { checkout, cwd } of attachedCheckouts) {
         const outcome = yield* Effect.gen(function* () {
-          for (
-            let candidate = event.payload.turnCount;
-            candidate <= currentTurnCount;
-            candidate += 1
-          ) {
-            const checkpointRef = checkpointRefForThreadCheckoutTurn(
+          const turnCounts = turnCountsOfCheckpointRefs(
+            yield* checkpointStore.listCheckpointRefs({
+              cwd,
+              prefix: checkpointRefPrefixForThreadCheckout(
+                event.payload.threadId,
+                checkout.checkpointId,
+              ),
+            }),
+          );
+          const restoreTurnCount =
+            turnCounts.findLast((turnCount) => turnCount <= event.payload.turnCount) ??
+            turnCounts[0];
+          if (restoreTurnCount === undefined) {
+            return "missing" as const;
+          }
+          const restored = yield* checkpointStore.restoreCheckpoint({
+            cwd,
+            checkpointRef: checkpointRefForThreadCheckoutTurn(
               event.payload.threadId,
               checkout.checkpointId,
-              candidate,
-            );
-            if (yield* checkpointStore.hasCheckpointRef({ cwd, checkpointRef })) {
-              const restored = yield* checkpointStore.restoreCheckpoint({
-                cwd,
-                checkpointRef,
-                fallbackToHead: false,
-              });
-              return restored ? ("restored" as const) : ("unavailable" as const);
-            }
+              restoreTurnCount,
+            ),
+            fallbackToHead: false,
+          });
+          if (!restored) {
+            return "unavailable" as const;
           }
-          return "missing" as const;
+          if (restoreTurnCount > event.payload.turnCount) {
+            yield* checkpointStore.captureCheckpoint({
+              cwd,
+              checkpointRef: checkpointRefForThreadCheckoutTurn(
+                event.payload.threadId,
+                checkout.checkpointId,
+                event.payload.turnCount,
+              ),
+            });
+          }
+          return "restored" as const;
         }).pipe(
           Effect.catch((error) =>
             Effect.logWarning("failed to restore attached checkout checkpoint", {

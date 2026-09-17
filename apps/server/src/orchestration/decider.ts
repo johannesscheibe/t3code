@@ -1203,6 +1203,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `project ${command.projectId} has no checkout attached to thread ${command.threadId}`,
         });
       }
+      if (command.expectedBranch !== undefined && existing.branch !== command.expectedBranch) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `checkout of project ${command.projectId} on thread ${command.threadId} left branch ${command.expectedBranch}`,
+        });
+      }
       if (
         existing.branch === command.branch &&
         existing.pullRequest?.number === command.pullRequest?.number &&

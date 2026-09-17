@@ -5,7 +5,11 @@ import * as NodeOS from "node:os";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
-import { ProjectId, type OrchestrationProjectShell } from "@t3tools/contracts";
+import {
+  ProjectId,
+  type OrchestrationProjectShell,
+  type OrchestrationThreadShell,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -16,6 +20,8 @@ import * as WorktreeRemoval from "./WorktreeRemoval.ts";
 function runGit(cwd: string, args: string[]) {
   NodeChildProcess.execFileSync("git", ["-C", cwd, ...args], { stdio: "pipe" });
 }
+
+const NOW = "2026-01-01T00:00:00.000Z";
 
 const fixture = Effect.acquireRelease(
   Effect.sync(() => {
@@ -43,7 +49,7 @@ const fixture = Effect.acquireRelease(
   ({ root }) => Effect.sync(() => NodeFS.rmSync(root, { recursive: true, force: true })),
 );
 
-const makeRemoval = (roots: string[]) =>
+const makeRemoval = (roots: string[], archivedWorktreePaths: string[] = []) =>
   WorktreeRemoval.make.pipe(
     Effect.provide(
       Layer.mergeAll(
@@ -64,6 +70,19 @@ const makeRemoval = (roots: string[]) =>
                   }) satisfies OrchestrationProjectShell,
               ),
             ),
+          getShellSnapshot: () =>
+            Effect.succeed({ snapshotSequence: 0, projects: [], threads: [], updatedAt: NOW }),
+          // Only the workspace paths matter to the removal guard.
+          getArchivedShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 0,
+              projects: [],
+              threads: archivedWorktreePaths.map(
+                (worktreePath) =>
+                  ({ worktreePath, checkouts: [] }) as unknown as OrchestrationThreadShell,
+              ),
+              updatedAt: NOW,
+            }),
         }),
         Layer.mock(GitWorkflowService)({
           removeWorktree: (input) =>
@@ -90,6 +109,16 @@ describe("WorktreeRemoval", () => {
           "keep this\n",
         );
       }),
+  );
+
+  it.effect("keeps a worktree that an archived thread still uses", () =>
+    Effect.gen(function* () {
+      const { repo, checkout, alias } = yield* fixture;
+      const remove = yield* makeRemoval([repo], [alias]);
+      const error = yield* remove({ cwd: repo, path: checkout, force: true }).pipe(Effect.flip);
+      expect(error.detail).toContain("still uses this worktree");
+      expect(NodeFS.existsSync(checkout)).toBe(true);
+    }),
   );
 
   it.effect("allows removal of an unregistered checkout even with a missing project root", () =>

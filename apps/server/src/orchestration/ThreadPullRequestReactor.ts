@@ -167,6 +167,7 @@ export const make = Effect.gen(function* () {
                   ),
                   threadId: thread.id,
                   projectId: checkout.projectId,
+                  expectedBranch: checkout.branch,
                   branch: checkout.branch,
                   pullRequest,
                 });

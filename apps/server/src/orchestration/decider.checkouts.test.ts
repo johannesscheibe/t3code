@@ -225,6 +225,18 @@ it.layer(NodeServices.layer)("thread checkout decider", (it) => {
     }),
   );
 
+  it.effect("rejects a pull request looked up for a branch the checkout has since left", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        decideOrchestrationCommand({
+          readModel: makeReadModel([libCheckout]),
+          command: yield* sync({ expectedBranch: "feat/old", branch: "feat/old" }),
+        }),
+      );
+      expect(error._tag).toBe("OrchestrationCommandInvariantError");
+    }),
+  );
+
   it.effect("rejects syncing or detaching a project that has no checkout attached", () =>
     Effect.gen(function* () {
       const model = makeReadModel([]);

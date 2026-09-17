@@ -2326,6 +2326,135 @@ describe("CheckpointReactor", () => {
             checkpointRefForThreadCheckoutTurn(threadId, checkout.checkpointId, 1),
           ),
         ).toBe(false);
+        // The attach state becomes the checkout's ref for the turn it returned to.
+        expect(
+          gitShowFileAtRef(
+            libraryCwd,
+            checkpointRefForThreadCheckoutTurn(threadId, checkout.checkpointId, 0),
+            "README.md",
+          ),
+        ).toBe("v1\n");
+      }),
+  );
+
+  effectIt.effect(
+    "reverts an attached checkout to its latest earlier ref when the turn's own is missing",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() =>
+          createHarness({ providerName: ProviderDriverKind.make("claudeAgent") }),
+        );
+        const createdAt = "2026-01-01T00:00:00.000Z";
+        const threadId = ThreadId.make("thread-1");
+        const libraryCwd = createGitRepository();
+        tempDirs.push(libraryCwd);
+
+        yield* harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("cmd-session-set-gap"),
+          threadId,
+          session: {
+            threadId,
+            status: "ready",
+            providerName: "claudeAgent",
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: createdAt,
+          },
+          createdAt,
+        });
+        yield* harness.engine.dispatch({
+          type: "thread.turn.diff.complete",
+          commandId: CommandId.make("cmd-diff-gap-1"),
+          threadId,
+          turnId: asTurnId("turn-gap-1"),
+          completedAt: createdAt,
+          checkpointRef: checkpointRefForThreadTurn(threadId, 1),
+          status: "ready",
+          files: [],
+          checkpointTurnCount: 1,
+          createdAt,
+        });
+
+        const projectId = yield* Effect.promise(() => harness.registerAttachedProject(libraryCwd));
+        const attach = yield* harness.makeAttach();
+        const { checkout } = yield* attach(
+          { threadId, projectId, target: { type: "local" } },
+          "agent",
+        );
+        expect(
+          gitShowFileAtRef(
+            libraryCwd,
+            checkpointRefForThreadCheckoutTurn(threadId, checkout.checkpointId, 1),
+            "README.md",
+          ),
+        ).toBe("v1\n");
+
+        NodeFS.writeFileSync(NodePath.join(libraryCwd, "README.md"), "library v2\n", "utf8");
+        yield* harness.engine.dispatch({
+          type: "thread.turn.diff.complete",
+          commandId: CommandId.make("cmd-diff-gap-2"),
+          threadId,
+          turnId: asTurnId("turn-gap-2"),
+          completedAt: createdAt,
+          checkpointRef: checkpointRefForThreadTurn(threadId, 2),
+          status: "ready",
+          files: [],
+          checkpointTurnCount: 2,
+          createdAt,
+        });
+
+        // Turn 2's capture failed, so only turn 3 has a ref after the attach baseline.
+        runGit(libraryCwd, ["commit", "-am", "library v2"]);
+        runGit(libraryCwd, [
+          "update-ref",
+          checkpointRefForThreadCheckoutTurn(threadId, checkout.checkpointId, 3),
+          "HEAD",
+        ]);
+        yield* harness.engine.dispatch({
+          type: "thread.turn.diff.complete",
+          commandId: CommandId.make("cmd-diff-gap-3"),
+          threadId,
+          turnId: asTurnId("turn-gap-3"),
+          completedAt: createdAt,
+          checkpointRef: checkpointRefForThreadTurn(threadId, 3),
+          status: "ready",
+          files: [],
+          checkpointTurnCount: 3,
+          createdAt,
+        });
+
+        const reverted = Effect.scoped(
+          Effect.gen(function* () {
+            const events = yield* harness.engine.subscribeDomainEvents;
+            const waiter = yield* Stream.runHead(
+              events.pipe(Stream.filter((event) => event.type === "thread.reverted")),
+            ).pipe(Effect.forkChild);
+            yield* harness.engine.dispatch({
+              type: "thread.checkpoint.revert",
+              commandId: CommandId.make("cmd-revert-gap"),
+              threadId,
+              turnCount: 2,
+              createdAt,
+            });
+            yield* Fiber.join(waiter);
+          }),
+        );
+        yield* reverted;
+        expect(NodeFS.readFileSync(NodePath.join(libraryCwd, "README.md"), "utf8")).toBe("v1\n");
+        expect(
+          gitRefExists(
+            libraryCwd,
+            checkpointRefForThreadCheckoutTurn(threadId, checkout.checkpointId, 1),
+          ),
+        ).toBe(true);
+        expect(
+          gitRefExists(
+            libraryCwd,
+            checkpointRefForThreadCheckoutTurn(threadId, checkout.checkpointId, 3),
+          ),
+        ).toBe(false);
       }),
   );
 

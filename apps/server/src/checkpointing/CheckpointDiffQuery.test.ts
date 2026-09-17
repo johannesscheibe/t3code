@@ -63,6 +63,7 @@ describe("CheckpointDiffQuery.layer", () => {
         isGitRepository: () => Effect.succeed(true),
         captureCheckpoint: () => Effect.void,
         hasCheckpointRef: () => Effect.succeed(true),
+        listCheckpointRefs: () => Effect.succeed([]),
         restoreCheckpoint: () => Effect.succeed(true),
         diffCheckpoints: ({ fromCheckpointRef, toCheckpointRef, cwd, ignoreWhitespace }) =>
           Effect.sync(() => {
@@ -178,6 +179,7 @@ describe("CheckpointDiffQuery.layer", () => {
         isGitRepository: () => Effect.succeed(true),
         captureCheckpoint: () => Effect.void,
         hasCheckpointRef: () => Effect.succeed(true),
+        listCheckpointRefs: () => Effect.succeed([]),
         restoreCheckpoint: () => Effect.succeed(true),
         diffCheckpoints: ({ fromCheckpointRef, toCheckpointRef, cwd, ignoreWhitespace }) =>
           Effect.sync(() => {
@@ -273,6 +275,7 @@ describe("CheckpointDiffQuery.layer", () => {
         isGitRepository: () => Effect.succeed(true),
         captureCheckpoint: () => Effect.void,
         hasCheckpointRef: () => Effect.succeed(true),
+        listCheckpointRefs: () => Effect.succeed([]),
         restoreCheckpoint: () => Effect.succeed(true),
         diffCheckpoints: ({ ignoreWhitespace }) =>
           Effect.sync(() => {
@@ -352,6 +355,7 @@ describe("CheckpointDiffQuery.layer", () => {
             hasCheckpointRefCallCount += 1;
             return true;
           }),
+        listCheckpointRefs: () => Effect.succeed([]),
         restoreCheckpoint: () => Effect.succeed(true),
         diffCheckpoints: () => Effect.succeed("diff patch"),
         deleteCheckpointRefs: () => Effect.void,
@@ -412,6 +416,7 @@ describe("CheckpointDiffQuery.layer", () => {
         isGitRepository: () => Effect.succeed(true),
         captureCheckpoint: () => Effect.void,
         hasCheckpointRef: () => Effect.succeed(true),
+        listCheckpointRefs: () => Effect.succeed([]),
         restoreCheckpoint: () => Effect.succeed(true),
         diffCheckpoints: () => Effect.succeed(""),
         deleteCheckpointRefs: () => Effect.void,
@@ -485,6 +490,17 @@ describe("CheckpointDiffQuery.layer", () => {
         isGitRepository: () => Effect.succeed(true),
         captureCheckpoint: () => Effect.void,
         hasCheckpointRef: () => Effect.succeed(true),
+        // The library was attached before turn 1, the docs during turn 2.
+        listCheckpointRefs: ({ cwd }) =>
+          Effect.succeed(
+            (cwd === "/tmp/docs" ? [2, 3] : [1, 2, 3]).map((turnCount) =>
+              checkpointRefForThreadCheckoutTurn(
+                threadId,
+                cwd === "/tmp/docs" ? "docs-attachment" : "library-attachment",
+                turnCount,
+              ),
+            ),
+          ),
         restoreCheckpoint: () => Effect.succeed(true),
         diffCheckpoints: ({ cwd, fromCheckpointRef, toCheckpointRef }) =>
           Effect.sync(() => {
@@ -534,10 +550,10 @@ describe("CheckpointDiffQuery.layer", () => {
                     threadId,
                     workspaceRoot: "/tmp/workspace",
                     worktreePath: null,
-                    checkpointTurnCount: 2,
-                    checkpointRef: checkpointRefForThreadTurn(threadId, 2),
+                    checkpointTurnCount: 3,
+                    checkpointRef: checkpointRefForThreadTurn(threadId, 3),
                   }),
-                  checkpoints: [1, 2].map((turnCount) => ({
+                  checkpoints: [1, 2, 3].map((turnCount) => ({
                     turnId: TurnId.make(`turn-${turnCount}`),
                     checkpointTurnCount: turnCount,
                     checkpointRef: checkpointRefForThreadTurn(threadId, turnCount),
@@ -567,19 +583,27 @@ describe("CheckpointDiffQuery.layer", () => {
         ),
       );
 
-      const { library, docs, rejected } = yield* Effect.gen(function* () {
+      const { library, docs, docsStraddling, rejected } = yield* Effect.gen(function* () {
         const query = yield* CheckpointDiffQuery.CheckpointDiffQuery;
         const range = { threadId, fromTurnCount: 1, toTurnCount: 2 };
         const library = yield* query.getTurnDiff({ ...range, checkoutProjectId: libraryProjectId });
         const docs = yield* query.getTurnDiff({ ...range, checkoutProjectId: docsProjectId });
+        const docsStraddling = yield* query.getTurnDiff({
+          threadId,
+          fromTurnCount: 1,
+          toTurnCount: 3,
+          checkoutProjectId: docsProjectId,
+        });
         const rejected = yield* query
           .getTurnDiff({ ...range, checkoutProjectId: ProjectId.make("project-unattached") })
           .pipe(Effect.flip);
-        return { library, docs, rejected };
+        return { library, docs, docsStraddling, rejected };
       }).pipe(Effect.provide(layer));
 
       expect(library.diff).toBe("diff of /tmp/library-worktree");
-      expect(docs.diff).toBe("diff of /tmp/docs");
+      // Turns before the attachment changed nothing in the checkout.
+      expect(docs.diff).toBe("");
+      expect(docsStraddling.diff).toBe("diff of /tmp/docs");
       expect(diffCalls).toEqual([
         {
           cwd: "/tmp/library-worktree",
@@ -588,8 +612,8 @@ describe("CheckpointDiffQuery.layer", () => {
         },
         {
           cwd: "/tmp/docs",
-          fromCheckpointRef: checkpointRefForThreadCheckoutTurn(threadId, "docs-attachment", 1),
-          toCheckpointRef: checkpointRefForThreadCheckoutTurn(threadId, "docs-attachment", 2),
+          fromCheckpointRef: checkpointRefForThreadCheckoutTurn(threadId, "docs-attachment", 2),
+          toCheckpointRef: checkpointRefForThreadCheckoutTurn(threadId, "docs-attachment", 3),
         },
       ]);
       expect(rejected._tag).toBe("CheckpointWorkspacePathMissingError");

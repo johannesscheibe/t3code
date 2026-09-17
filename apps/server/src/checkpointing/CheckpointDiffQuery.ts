@@ -31,7 +31,12 @@ import {
   CheckpointWorkspacePathMissingError,
 } from "./Errors.ts";
 import type { CheckpointServiceError } from "./Errors.ts";
-import { checkpointRefForThreadCheckoutTurn, checkpointRefForThreadTurn } from "./Utils.ts";
+import {
+  checkpointRefForThreadCheckoutTurn,
+  checkpointRefForThreadTurn,
+  checkpointRefPrefixForThreadCheckout,
+  turnCountsOfCheckpointRefs,
+} from "./Utils.ts";
 import * as CheckpointStore from "./CheckpointStore.ts";
 
 /** Service tag for checkpoint diff queries. */
@@ -98,7 +103,14 @@ export const make = Effect.gen(function* () {
       if (checkout === undefined || cwd === undefined) {
         return yield* new CheckpointWorkspacePathMissingError({ operation, threadId });
       }
-      return { cwd, checkpointId: checkout.checkpointId };
+      // A checkout attached partway through the thread has refs from that turn on.
+      const turnCounts = turnCountsOfCheckpointRefs(
+        yield* checkpointStore.listCheckpointRefs({
+          cwd,
+          prefix: checkpointRefPrefixForThreadCheckout(threadId, checkout.checkpointId),
+        }),
+      );
+      return { cwd, checkpointId: checkout.checkpointId, turnCounts };
     },
   );
 
@@ -191,6 +203,31 @@ export const make = Effect.gen(function* () {
         input.checkoutProjectId === undefined
           ? null
           : yield* requireAttachedCheckout(operation, input.threadId, input.checkoutProjectId);
+      // Turns before the attachment changed nothing in the checkout, and a range that
+      // straddles the attachment starts at its first ref.
+      const attachedFirstTurnCount = attached?.turnCounts[0];
+      const attachedFromTurnCount =
+        attachedFirstTurnCount === undefined
+          ? input.fromTurnCount
+          : Math.max(input.fromTurnCount, attachedFirstTurnCount);
+      if (attached !== null) {
+        if (attachedFirstTurnCount !== undefined && input.toTurnCount <= attachedFirstTurnCount) {
+          return buildTurnDiffResult(input, "");
+        }
+        for (const [checkpoint, turnCount] of [
+          ["from", attachedFromTurnCount],
+          ["to", input.toTurnCount],
+        ] as const) {
+          if (!attached.turnCounts.includes(turnCount)) {
+            return yield* new CheckpointRefUnavailableError({
+              operation,
+              threadId: input.threadId,
+              turnCount,
+              checkpoint,
+            });
+          }
+        }
+      }
       const diff = yield* checkpointStore
         .diffCheckpoints(
           attached === null
@@ -206,7 +243,7 @@ export const make = Effect.gen(function* () {
                 fromCheckpointRef: checkpointRefForThreadCheckoutTurn(
                   input.threadId,
                   attached.checkpointId,
-                  input.fromTurnCount,
+                  attachedFromTurnCount,
                 ),
                 toCheckpointRef: checkpointRefForThreadCheckoutTurn(
                   input.threadId,
@@ -303,31 +340,15 @@ export const make = Effect.gen(function* () {
       input.checkoutProjectId === undefined
         ? null
         : yield* requireAttachedCheckout(operation, input.threadId, input.checkoutProjectId);
-    let attachedFromTurnCount: number | null = null;
-    if (attached !== null) {
-      // A checkout attached partway through the thread starts at its first ref.
-      for (let candidate = 0; candidate <= input.toTurnCount; candidate += 1) {
-        const exists = yield* checkpointStore.hasCheckpointRef({
-          cwd: attached.cwd,
-          checkpointRef: checkpointRefForThreadCheckoutTurn(
-            input.threadId,
-            attached.checkpointId,
-            candidate,
-          ),
-        });
-        if (exists) {
-          attachedFromTurnCount = candidate;
-          break;
-        }
-      }
-      if (attachedFromTurnCount === null) {
-        return yield* new CheckpointRefUnavailableError({
-          operation,
-          threadId: input.threadId,
-          turnCount: 0,
-          checkpoint: "from",
-        });
-      }
+    const attachedFromTurnCount =
+      attached?.turnCounts.find((turnCount) => turnCount <= input.toTurnCount) ?? null;
+    if (attached !== null && attachedFromTurnCount === null) {
+      return yield* new CheckpointRefUnavailableError({
+        operation,
+        threadId: input.threadId,
+        turnCount: 0,
+        checkpoint: "from",
+      });
     }
 
     const diff = yield* checkpointStore
