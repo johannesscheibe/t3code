@@ -3920,6 +3920,7 @@ export function makeOpenCodeAdapter(
       provider: PROVIDER,
       capabilities: {
         sessionModelSwitch: "in-session",
+        ignoresAdditionalDirectories: true,
       },
       startSession,
       sendTurn,

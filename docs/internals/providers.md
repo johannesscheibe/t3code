@@ -96,15 +96,19 @@ also survive normalization; a display label is not necessarily a valid reply.
 ## Attached checkouts
 
 A thread can attach checkouts of other projects, either a project's own checkout or a worktree.
-Providers accept extra directories only when a session starts, so the [command reactor](../../apps/server/src/orchestration/Layers/ProviderCommandReactor.ts)
+Providers that accept extra directories take them only when a session starts, so the
+[command reactor](../../apps/server/src/orchestration/Layers/ProviderCommandReactor.ts)
 restarts a session with its resume cursor when the attached set changes. A checkout attached
 during a turn becomes writable on the next one.
 
-Claude and the ACP adapters receive the paths as additional directories. Antigravity also admits
-them in its own file-access checks. Codex has no start-time field, so each workspace-write turn
-lists them as writable roots. ACP `session/load` carries no directories, so a loaded Cursor or
-Grok session keeps only its cwd. OpenCode still asks before touching a path outside its directory,
-and that prompt covers attached checkouts.
+Claude receives the paths as additional directories, and Antigravity admits them in its own
+file-access checks. Codex has no start-time field, so each workspace-write turn lists them as
+writable roots. Cursor, Grok and OpenCode cannot take extra directories and declare
+`ignoresAdditionalDirectories`: they ask before touching a path outside their directory, that
+prompt covers attached checkouts, and a changed set restarts nothing. ACP does define
+`additionalDirectories` for `session/new`, `session/load` and `session/resume`, gated on the
+agent advertising `sessionCapabilities.additionalDirectories`. Neither Cursor nor Grok
+advertises it, and the pinned `effect-acp` schema predates the field, so encoding drops it.
 
 ## Attachments and stored history
 

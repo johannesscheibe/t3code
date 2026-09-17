@@ -32,7 +32,8 @@ checkout when their work reaches another project, and they pick the same kind un
 ask for another.
 
 The thread must start in a Git workspace. A thread can have one checkout per project. The
-agent can write to a newly attached checkout from its next message. Checkpoints and revert
+agent can write to a newly attached checkout from its next message. Cursor, Grok and
+OpenCode ask for approval instead, because they cannot be given extra directories. Checkpoints and revert
 include attached checkouts, so reverting also resets a local checkout that other threads
 work in. Once the thread has started, the workspace label in the composer shows how many
 are attached, for example **Worktree +1**; select it to open a checkout in the Files panel.

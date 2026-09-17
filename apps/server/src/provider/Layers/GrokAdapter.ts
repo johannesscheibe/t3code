@@ -1007,9 +1007,6 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             cwd,
             runtimeMode: input.runtimeMode,
             ...(resumeSessionId ? { resumeSessionId } : {}),
-            ...(input.additionalDirectories?.length
-              ? { additionalDirectories: input.additionalDirectories }
-              : {}),
             clientInfo: { name: "t3-code", version: "0.0.0" },
             ...(mcpSession
               ? {
@@ -2162,7 +2159,11 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
 
     return {
       provider: PROVIDER,
-      capabilities: { sessionModelSwitch: "in-session", supportsConversationRollback: false },
+      capabilities: {
+        sessionModelSwitch: "in-session",
+        supportsConversationRollback: false,
+        ignoresAdditionalDirectories: true,
+      },
       compaction: { type: "slash-command", command: "/compact" },
       startSession,
       sendTurn,

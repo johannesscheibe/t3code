@@ -555,9 +555,6 @@ export function makeCursorAdapter(
             cwd,
             runtimeMode: input.runtimeMode,
             ...(resumeSessionId ? { resumeSessionId } : {}),
-            ...(input.additionalDirectories?.length
-              ? { additionalDirectories: input.additionalDirectories }
-              : {}),
             clientInfo: { name: "t3-code", version: "0.0.0" },
             ...(mcpSession
               ? {
@@ -1240,7 +1237,11 @@ export function makeCursorAdapter(
 
     return {
       provider: PROVIDER,
-      capabilities: { sessionModelSwitch: "in-session", supportsConversationRollback: false },
+      capabilities: {
+        sessionModelSwitch: "in-session",
+        supportsConversationRollback: false,
+        ignoresAdditionalDirectories: true,
+      },
       compaction: { type: "slash-command", command: "/compress" },
       startSession,
       sendTurn,

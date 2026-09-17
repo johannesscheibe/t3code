@@ -170,6 +170,7 @@ describe("ProviderCommandReactor", () => {
     readonly baseDir?: string;
     readonly threadModelSelection?: ModelSelection;
     readonly sessionModelSwitch?: "unsupported" | "in-session";
+    readonly ignoresAdditionalDirectories?: boolean;
     readonly requiresNewThreadForModelChange?: boolean;
     readonly unreadableHistory?: boolean;
     readonly titleRegenerationCompletionDispatchFailures?: number;
@@ -365,6 +366,7 @@ describe("ProviderCommandReactor", () => {
       getCapabilities: (_provider) =>
         Effect.succeed({
           sessionModelSwitch: input?.sessionModelSwitch ?? "in-session",
+          ...(input?.ignoresAdditionalDirectories ? { ignoresAdditionalDirectories: true } : {}),
         }),
       assertConversationRollbackSupported: () => unsupported(),
       getInstanceInfo: (instanceId) => {
@@ -3154,6 +3156,58 @@ describe("ProviderCommandReactor", () => {
     await startTurn(3);
     await waitFor(() => harness.sendTurn.mock.calls.length === 3);
     expect(harness.startSession.mock.calls.length).toBe(2);
+  });
+
+  it("keeps the session when the provider cannot take attached checkouts", async () => {
+    const harness = await createHarness({ ignoresAdditionalDirectories: true });
+    const now = "2026-01-01T00:00:00.000Z";
+    const startTurn = (index: number) =>
+      Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make(`cmd-turn-start-prompted-${index}`),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId(`user-message-prompted-${index}`),
+            role: "user",
+            text: "hello",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        }),
+      );
+
+    await startTurn(1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-project-create-prompted-lib"),
+        projectId: asProjectId("project-lib"),
+        title: "Library",
+        workspaceRoot: "/tmp/provider-library",
+        defaultModelSelection: null,
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.checkout.attach",
+        commandId: CommandId.make("cmd-thread-checkout-attach-prompted"),
+        threadId: ThreadId.make("thread-1"),
+        projectId: asProjectId("project-lib"),
+        worktreePath: null,
+        branch: "main",
+        source: "agent",
+        checkpointId: "checkout-prompted",
+      }),
+    );
+
+    await startTurn(2);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    expect(harness.startSession.mock.calls.length).toBe(1);
   });
 
   it("restarts claude sessions when claude effort changes", async () => {

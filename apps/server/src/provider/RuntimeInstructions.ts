@@ -3,7 +3,7 @@ When the t3-code MCP server exposes link_pull_request, you must use it to regist
 </pull_request_linking>`;
 
 const THREAD_CHECKOUT_INSTRUCTIONS = `<thread_checkouts>
-When the t3-code MCP server exposes attach_checkout and your task needs changes in another project, call list_thread_checkouts to see this thread's workspace, the checkouts already attached, and the projects you can attach. Then call attach_checkout for that project and make its changes in the returned path. Unless you pass a mode, it attaches the same kind of workspace this thread uses: the project's own checkout, or a new worktree. If writes to a newly attached checkout are rejected, say so: access is granted when your next turn starts. Do not detach checkouts unless the user asks.
+When the t3-code MCP server exposes attach_checkout and your task needs changes in another project, call list_thread_checkouts to see this thread's workspace, the checkouts already attached, and the projects you can attach. Then call attach_checkout for that project and make its changes in the returned path. Unless you pass a mode, it attaches the same kind of workspace this thread uses: the project's own checkout, or a new worktree. Writing to a newly attached checkout may need approval from the user, or may be rejected until your next turn starts. If it is rejected, say so. Do not detach checkouts unless the user asks.
 </thread_checkouts>`;
 
 /** Shared runtime context; omit model and effort when the harness manages them dynamically. */
