@@ -3,7 +3,6 @@ import {
   type OrchestrationProjectShell,
   type OrchestrationThreadShell,
 } from "@t3tools/contracts";
-import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -119,29 +118,16 @@ const make = Effect.gen(function* () {
         // The agent works the way the user set this thread up: in the project's
         // checkout for a local thread, in a new worktree for a worktree thread.
         const mode = input.mode ?? modeOf(thread);
-        // Related changes across repositories read best on one branch name. During
-        // the first turn the thread's branch is a placeholder that gets renamed
-        // later, so it is not copied into another repository.
-        const threadBranch =
-          thread.branch !== null && !isTemporaryWorktreeBranch(thread.branch)
-            ? thread.branch
-            : undefined;
-        const branch = input.branch ?? threadBranch;
-        if (mode === "worktree" && branch === undefined && !alreadyAttached) {
-          return yield* new CheckoutAttachFailedError({
-            detail: `Pass a branch name for the new worktree of ${project.title}.`,
-          });
-        }
         const { checkout } = yield* attach(
           {
             threadId: thread.id,
             projectId: project.id,
             target:
-              mode === "local" || branch === undefined
+              mode === "local"
                 ? { type: "local" }
                 : {
                     type: "new-worktree",
-                    branch,
+                    ...(input.branch === undefined ? {} : { branch: input.branch }),
                     ...(input.baseBranch === undefined ? {} : { baseBranch: input.baseBranch }),
                     runSetupScript: true,
                   },

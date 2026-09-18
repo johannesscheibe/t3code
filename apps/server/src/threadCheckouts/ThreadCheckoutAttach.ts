@@ -9,6 +9,7 @@ import {
   type ThreadCheckoutAttachResult,
   type ThreadCheckoutSource,
 } from "@t3tools/contracts";
+import { buildTemporaryWorktreeBranchName, isTemporaryWorktreeBranch } from "@t3tools/shared/git";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -172,12 +173,55 @@ export const make = Effect.gen(function* () {
               `${project.title} has no checked-out branch to start from. Pass a base branch.`,
             );
           }
+          const cwd = project.workspaceRoot;
+          const gitFailure = attachFailure(`Could not prepare a worktree of ${project.title}.`);
+          // Related changes across repositories read best on one branch name. A
+          // thread still on its placeholder branch, or a name this repository
+          // already uses, gets a placeholder of its own instead.
+          const threadBranch =
+            thread.branch !== null && !isTemporaryWorktreeBranch(thread.branch)
+              ? thread.branch
+              : null;
+          const branch =
+            target.branch ??
+            (threadBranch !== null &&
+            !(yield* git
+              .hasCommit({ cwd, refName: `refs/heads/${threadBranch}` })
+              .pipe(Effect.mapError(gitFailure)))
+              ? threadBranch
+              : buildTemporaryWorktreeBranchName((bytes) =>
+                  NodeCrypto.randomBytes(bytes).toString("hex"),
+                ));
+          // Like a new thread's worktree: repos without the remote branch fall
+          // back to the local base branch.
+          let baseRef = baseBranch;
+          if (
+            target.startFromOrigin === true &&
+            (yield* git
+              .remoteExists({ cwd, remoteName: "origin" })
+              .pipe(Effect.mapError(gitFailure)))
+          ) {
+            yield* git.fetchRemote({ cwd, remoteName: "origin" }).pipe(Effect.mapError(gitFailure));
+            if (
+              yield* git
+                .remoteBranchExists({ cwd, refName: baseBranch, remoteName: "origin" })
+                .pipe(Effect.mapError(gitFailure))
+            ) {
+              baseRef = (yield* git
+                .resolveRemoteTrackingCommit({
+                  cwd,
+                  refName: baseBranch,
+                  fallbackRemoteName: "origin",
+                })
+                .pipe(Effect.mapError(gitFailure))).commitSha;
+            }
+          }
           const created = yield* git
             .createWorktree({
-              cwd: project.workspaceRoot,
-              refName: baseBranch,
+              cwd,
+              refName: baseRef,
               baseRefName: baseBranch,
-              newRefName: target.branch,
+              newRefName: branch,
               path: null,
             })
             .pipe(

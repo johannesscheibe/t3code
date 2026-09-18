@@ -24,9 +24,11 @@ worktree**, each background submission creates its own worktree.
 
 When a task needs changes in another project, attach a checkout of that project to the
 thread. On web and desktop, open the checkout selector at the top of the Files panel and
-choose **Attach checkout…**. As with a new thread, you can work in the project's **Local
-checkout**, create a **New worktree** on a new branch (named after the thread's branch by
-default), or enter an **Existing path** to a checkout of the project's repository. The
+choose **Attach checkout…**. You choose it the way you choose a new thread's starting point:
+the project's **Current checkout** or a **New worktree**, plus a ref. In the current
+checkout, picking a ref that already has a worktree attaches that worktree, and picking any
+other ref switches the checkout to it. For a new worktree the ref is the base, and the new
+branch is named after the thread's branch when the project has no branch by that name. The
 dialog starts with the kind of workspace the thread itself uses. Agents can also attach a
 checkout when their work reaches another project, and they pick the same kind unless you
 ask for another.

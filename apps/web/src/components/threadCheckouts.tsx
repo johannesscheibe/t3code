@@ -5,6 +5,7 @@ import type {
   ThreadCheckout,
   ThreadCheckoutAttachTarget,
   ThreadId,
+  VcsRef,
 } from "@t3tools/contracts";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/models";
 import {
@@ -12,9 +13,15 @@ import {
   settlePromise,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
-import { FolderGit2Icon, FolderGitIcon, FolderIcon } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import {
+  ChevronDownIcon,
+  FolderGit2Icon,
+  FolderIcon,
+  GitBranchIcon,
+  SearchIcon,
+} from "lucide-react";
+import { useCallback, useDeferredValue, useMemo, useState } from "react";
 
 import {
   readEnvironmentThreadRefs,
@@ -24,12 +31,24 @@ import {
   useProjects,
   useServerConfigs,
 } from "~/state/entities";
+import { useEnvironmentQuery } from "~/state/query";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { vcsEnvironment } from "~/state/vcs";
+import { useEnvironmentSettings } from "~/hooks/useSettings";
 import { readLocalApi } from "~/localApi";
 import { formatWorktreePathForDisplay, getOrphanedCheckoutWorktrees } from "~/worktreeCleanup";
+import { type EnvMode, resolveEnvModeLabel } from "./BranchToolbar.logic";
 import { Button } from "./ui/button";
+import {
+  Combobox,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxPopup,
+  ComboboxTrigger,
+} from "./ui/combobox";
 import {
   Dialog,
   DialogDescription,
@@ -39,17 +58,9 @@ import {
   DialogPopup,
   DialogTitle,
 } from "./ui/dialog";
-import { Input } from "./ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
+import { Switch } from "./ui/switch";
 import { toastManager } from "./ui/toast";
-
-type CheckoutAttachMode = ThreadCheckoutAttachTarget["type"];
-
-const CHECKOUT_ATTACH_MODE_ITEMS: ReadonlyArray<{ value: CheckoutAttachMode; label: string }> = [
-  { value: "local", label: "Local checkout" },
-  { value: "new-worktree", label: "New worktree" },
-  { value: "existing", label: "Existing path" },
-];
 
 /** Commands only log their failures, so a failed action the user started shows a toast. */
 function toastCommandFailure(
@@ -144,8 +155,7 @@ export function useThreadCheckouts(
   const detach = useCheckoutDetach(environmentId, thread);
   const { checkouts } = thread;
   // New checkouts start in the same kind of workspace the thread itself runs in.
-  const defaultAttachMode: CheckoutAttachMode =
-    thread.worktreePath === null ? "local" : "new-worktree";
+  const defaultAttachMode: EnvMode = thread.worktreePath === null ? "local" : "worktree";
 
   const environmentProjects = useMemo(
     () => projects.filter((project) => project.environmentId === environmentId),
@@ -173,73 +183,127 @@ export function useThreadCheckouts(
       checkout.worktreePath ??
       environmentProjects.find((project) => project.id === checkout.projectId)?.workspaceRoot ??
       null,
-    defaultBranch:
-      thread.branch !== null && !isTemporaryWorktreeBranch(thread.branch) ? thread.branch : null,
     defaultAttachMode,
   };
 }
 
-function CheckoutAttachModeIcon({ mode }: { mode: CheckoutAttachMode }) {
-  if (mode === "local") return <FolderIcon className="size-3" />;
-  if (mode === "new-worktree") return <FolderGit2Icon className="size-3" />;
-  return <FolderGitIcon className="size-3" />;
-}
+const ATTACH_ENV_MODES: ReadonlyArray<EnvMode> = ["local", "worktree"];
 
+/**
+ * Attach a checkout of another project, chosen the way a new thread's starting
+ * point is: the project's current checkout or a new worktree, plus a ref. A ref
+ * that already lives in a worktree attaches that worktree; any other ref is
+ * switched to in the current checkout, or becomes the new worktree's base.
+ */
 export function AttachCheckoutDialog({
   environmentId,
   threadId,
   projects,
-  defaultBranch,
   defaultMode,
   onClose,
 }: {
   environmentId: EnvironmentId;
   threadId: ThreadId;
   projects: ReadonlyArray<EnvironmentProject>;
-  defaultBranch: string | null;
-  defaultMode: CheckoutAttachMode;
+  defaultMode: EnvMode;
   onClose: () => void;
 }) {
   const attach = useAtomCommand(vcsEnvironment.attachThreadCheckout);
+  const switchRef = useAtomCommand(vcsEnvironment.switchRef, { reportFailure: false });
+  const settings = useEnvironmentSettings(environmentId);
   const [projectId, setProjectId] = useState<ProjectId | null>(projects[0]?.id ?? null);
-  const [mode, setMode] = useState<CheckoutAttachMode>(defaultMode);
-  const [existingPath, setExistingPath] = useState("");
-  const [baseBranch, setBaseBranch] = useState("");
-  const [branch, setBranch] = useState(defaultBranch ?? "");
+  const [mode, setMode] = useState<EnvMode>(defaultMode);
+  const [pickedBranch, setPickedBranch] = useState<VcsRef | null>(null);
+  const [refQuery, setRefQuery] = useState("");
+  const deferredRefQuery = useDeferredValue(refQuery).trim();
+  const [startFromOriginOverride, setStartFromOriginOverride] = useState<boolean | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const project = projects.find((candidate) => candidate.id === projectId) ?? null;
-  const targetComplete =
-    mode === "local" || (mode === "existing" ? existingPath.trim() !== "" : branch.trim() !== "");
+  const projectCwd = project?.workspaceRoot ?? null;
+  const startFromOrigin =
+    startFromOriginOverride ??
+    resolveProjectSettings(settings, project?.id ?? null, project ?? undefined).settings
+      .newWorktreesStartFromOrigin;
+
+  const allRefsQuery = useEnvironmentQuery(
+    projectCwd === null
+      ? null
+      : vcsEnvironment.listRefs({ environmentId, input: { cwd: projectCwd, limit: 100 } }),
+  );
+  // The server filters refs, so a search reaches refs beyond the first page.
+  const matchingRefsQuery = useEnvironmentQuery(
+    projectCwd === null || deferredRefQuery.length === 0
+      ? null
+      : vcsEnvironment.listRefs({
+          environmentId,
+          input: { cwd: projectCwd, query: deferredRefQuery, limit: 100 },
+        }),
+  );
+  const allRefs = allRefsQuery.data?.refs ?? [];
+  const refs = deferredRefQuery.length === 0 ? allRefs : (matchingRefsQuery.data?.refs ?? []);
+  const statusQuery = useEnvironmentQuery(
+    projectCwd === null
+      ? null
+      : vcsEnvironment.status({ environmentId, input: { cwd: projectCwd } }),
+  );
+  const currentBranch = statusQuery.data?.refName ?? null;
+  // Until a ref is picked, a new worktree starts from the default branch and the
+  // current checkout stays on the branch it has.
+  const defaultBaseBranch = allRefs.find((refName) => refName.isDefault)?.name ?? currentBranch;
+  const selectedRefName =
+    pickedBranch?.name ?? (mode === "worktree" ? defaultBaseBranch : currentBranch);
+  const reusedWorktreePath =
+    mode === "local" && pickedBranch?.worktreePath && pickedBranch.worktreePath !== projectCwd
+      ? pickedBranch.worktreePath
+      : null;
 
   const submit = async () => {
-    if (project === null || pending || !targetComplete) return;
+    if (project === null || pending) return;
     setPending(true);
     setError(null);
+    const fail = (result: Parameters<typeof isAtomCommandInterrupted>[0], fallback: string) => {
+      setPending(false);
+      if (result._tag !== "Failure" || isAtomCommandInterrupted(result)) return;
+      const failure = squashAtomCommandFailure(result);
+      setError(failure instanceof Error ? failure.message : fallback);
+    };
+    const switchesRef =
+      mode === "local" &&
+      pickedBranch !== null &&
+      reusedWorktreePath === null &&
+      !pickedBranch.current &&
+      pickedBranch.worktreePath !== project.workspaceRoot;
+    if (switchesRef) {
+      const switched = await switchRef({
+        environmentId,
+        input: { cwd: project.workspaceRoot, refName: pickedBranch.name },
+      });
+      if (switched._tag === "Failure") {
+        fail(switched, "Could not switch the ref.");
+        return;
+      }
+    }
     const target: ThreadCheckoutAttachTarget =
-      mode === "local"
-        ? { type: "local" }
-        : mode === "existing"
-          ? { type: "existing", path: existingPath.trim() }
-          : {
-              type: "new-worktree",
-              branch: branch.trim(),
-              ...(baseBranch.trim() ? { baseBranch: baseBranch.trim() } : {}),
-              runSetupScript: true,
-            };
+      mode === "worktree"
+        ? {
+            type: "new-worktree",
+            ...(selectedRefName ? { baseBranch: selectedRefName } : {}),
+            ...(startFromOrigin ? { startFromOrigin: true } : {}),
+            runSetupScript: true,
+          }
+        : reusedWorktreePath !== null
+          ? { type: "existing", path: reusedWorktreePath }
+          : { type: "local" };
     const result = await attach({
       environmentId,
       input: { threadId, projectId: project.id, target },
     });
-    setPending(false);
     if (result._tag === "Success") {
       onClose();
       return;
     }
-    if (!isAtomCommandInterrupted(result)) {
-      const failure = squashAtomCommandFailure(result);
-      setError(failure instanceof Error ? failure.message : "Could not attach the checkout.");
-    }
+    fail(result, "Could not attach the checkout.");
   };
 
   return (
@@ -263,7 +327,10 @@ export function AttachCheckoutDialog({
             <Select
               modal={false}
               value={projectId}
-              onValueChange={(value: string | null) => setProjectId(value as ProjectId | null)}
+              onValueChange={(value: string | null) => {
+                setProjectId(value as ProjectId | null);
+                setPickedBranch(null);
+              }}
               items={projects.map((candidate) => ({ value: candidate.id, label: candidate.title }))}
             >
               <SelectTrigger size="sm" aria-label="Project">
@@ -284,52 +351,135 @@ export function AttachCheckoutDialog({
               modal={false}
               value={mode}
               onValueChange={(value: string | null) => {
-                if (value !== null) setMode(value as CheckoutAttachMode);
+                if (value === null) return;
+                setMode(value as EnvMode);
+                setPickedBranch(null);
               }}
-              items={CHECKOUT_ATTACH_MODE_ITEMS}
+              items={ATTACH_ENV_MODES.map((value) => ({
+                value,
+                label: resolveEnvModeLabel(value),
+              }))}
             >
               <SelectTrigger size="sm" aria-label="Workspace">
                 <SelectValue />
               </SelectTrigger>
               <SelectPopup>
-                {CHECKOUT_ATTACH_MODE_ITEMS.map((item) => (
-                  <SelectItem key={item.value} value={item.value}>
+                {ATTACH_ENV_MODES.map((value) => (
+                  <SelectItem key={value} value={value}>
                     <span className="inline-flex items-center gap-1.5">
-                      <CheckoutAttachModeIcon mode={item.value} />
-                      {item.label}
+                      {value === "local" ? (
+                        <FolderIcon className="size-3" />
+                      ) : (
+                        <FolderGit2Icon className="size-3" />
+                      )}
+                      {resolveEnvModeLabel(value)}
                     </span>
                   </SelectItem>
                 ))}
               </SelectPopup>
             </Select>
           </label>
-          {mode === "new-worktree" ? (
-            <>
-              <label className="grid gap-1.5">
-                <span className="text-xs font-medium text-foreground">New branch</span>
-                <Input
-                  value={branch}
-                  placeholder="Branch to create in the new worktree"
-                  onChange={(event) => setBranch(event.target.value)}
-                />
-              </label>
-              <label className="grid gap-1.5">
-                <span className="text-xs font-medium text-foreground">Base branch</span>
-                <Input
-                  value={baseBranch}
-                  placeholder="Defaults to the project's current branch"
-                  onChange={(event) => setBaseBranch(event.target.value)}
-                />
-              </label>
-            </>
-          ) : null}
-          {mode === "existing" ? (
-            <label className="grid gap-1.5">
-              <span className="text-xs font-medium text-foreground">Checkout path</span>
-              <Input
-                value={existingPath}
-                placeholder="Path to a checkout of the project's repository"
-                onChange={(event) => setExistingPath(event.target.value)}
+          <div className="grid gap-1.5">
+            <span className="text-xs font-medium text-foreground">
+              {mode === "worktree" ? "Base ref" : "Ref"}
+            </span>
+            <Combobox
+              items={refs.map((refName) => refName.name)}
+              filteredItems={refs.map((refName) => refName.name)}
+              value={selectedRefName}
+              onOpenChange={(open) => {
+                if (!open) setRefQuery("");
+              }}
+              onValueChange={(value) => {
+                const picked = refs.find((candidate) => candidate.name === value);
+                if (picked) setPickedBranch(picked);
+              }}
+            >
+              <ComboboxTrigger
+                render={<Button variant="outline" size="sm" />}
+                className="min-w-0 justify-start font-normal"
+                disabled={projectCwd === null || pending}
+              >
+                <GitBranchIcon className="size-3 shrink-0 opacity-70" />
+                <span className="min-w-0 flex-1 truncate text-left">
+                  {selectedRefName === null
+                    ? "Select ref"
+                    : mode === "worktree"
+                      ? `From ${selectedRefName}`
+                      : selectedRefName}
+                </span>
+                {reusedWorktreePath !== null ? (
+                  <span className="shrink-0 text-[10px] text-muted-foreground/70">worktree</span>
+                ) : null}
+                <ChevronDownIcon className="size-3 shrink-0 opacity-50" />
+              </ComboboxTrigger>
+              <ComboboxPopup align="start" className="w-80 min-w-0 overflow-hidden">
+                <div className="min-w-0 shrink-0 px-3 pt-2.5">
+                  <div className="relative -translate-y-px border-b border-border/70 pb-1.5 transition-colors focus-within:border-ring">
+                    <SearchIcon
+                      aria-hidden="true"
+                      className="pointer-events-none absolute top-1.5 left-0 size-4 shrink-0 text-muted-foreground/55"
+                    />
+                    <ComboboxInput
+                      className="[&_input]:h-6.5 [&_input]:ps-5 [&_input]:font-sans [&_input]:leading-6.5"
+                      inputClassName="rounded-none bg-transparent text-sm"
+                      placeholder="Search refs..."
+                      showTrigger={false}
+                      size="sm"
+                      unstyled
+                      value={refQuery}
+                      onChange={(event) => setRefQuery(event.target.value)}
+                    />
+                  </div>
+                </div>
+                <ComboboxEmpty>No refs found.</ComboboxEmpty>
+                <ComboboxList className="max-h-56 min-w-0 overflow-x-hidden">
+                  {refs.map((refName) => {
+                    const badge = refName.current
+                      ? "current"
+                      : refName.worktreePath && refName.worktreePath !== projectCwd
+                        ? "worktree"
+                        : refName.isRemote
+                          ? "remote"
+                          : refName.isDefault
+                            ? "default"
+                            : null;
+                    return (
+                      <ComboboxItem
+                        hideIndicator
+                        key={refName.name}
+                        value={refName.name}
+                        className="pe-1.5"
+                      >
+                        <div className="flex w-full min-w-0 items-center justify-between gap-2">
+                          <span className="min-w-0 flex-1 truncate">{refName.name}</span>
+                          {badge ? (
+                            <span className="shrink-0 text-[10px] text-muted-foreground/45">
+                              {badge}
+                            </span>
+                          ) : null}
+                        </div>
+                      </ComboboxItem>
+                    );
+                  })}
+                </ComboboxList>
+              </ComboboxPopup>
+            </Combobox>
+          </div>
+          {mode === "worktree" ? (
+            <label className="flex cursor-pointer items-center justify-between gap-3 text-xs">
+              <span className="flex min-w-0 flex-col">
+                <span className="font-medium text-foreground">Start from origin</span>
+                <span className="text-muted-foreground">
+                  Creates the worktree from the latest matching branch on origin instead of your
+                  local branch.
+                </span>
+              </span>
+              <Switch
+                checked={startFromOrigin}
+                size="sm"
+                aria-label="Start worktree from origin"
+                onCheckedChange={(checked) => setStartFromOriginOverride(Boolean(checked))}
               />
             </label>
           ) : null}
@@ -342,10 +492,10 @@ export function AttachCheckoutDialog({
           <Button
             type="button"
             size="sm"
-            disabled={project === null || pending || !targetComplete}
+            disabled={project === null || pending}
             onClick={() => void submit()}
           >
-            {pending ? "Attaching..." : mode === "new-worktree" ? "Create and attach" : "Attach"}
+            {pending ? "Attaching..." : mode === "worktree" ? "Create and attach" : "Attach"}
           </Button>
         </DialogFooter>
       </DialogPopup>

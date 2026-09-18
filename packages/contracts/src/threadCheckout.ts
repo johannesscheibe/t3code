@@ -44,15 +44,18 @@ export type ThreadCheckout = typeof ThreadCheckout.Type;
 
 /**
  * What to attach: the project's own checkout, an existing checkout of its
- * repository by path, or a new worktree created from `baseBranch`.
+ * repository by path, or a new worktree created from `baseBranch`. Without a
+ * `branch` the worktree is named like the thread's own: after the thread's
+ * branch when the repository has none by that name, otherwise temporarily.
  */
 export const ThreadCheckoutAttachTarget = Schema.Union([
   Schema.Struct({ type: Schema.Literal("local") }),
   Schema.Struct({ type: Schema.Literal("existing"), path: TrimmedNonEmptyString }),
   Schema.Struct({
     type: Schema.Literal("new-worktree"),
-    branch: TrimmedNonEmptyString,
+    branch: Schema.optional(TrimmedNonEmptyString),
     baseBranch: Schema.optional(TrimmedNonEmptyString),
+    startFromOrigin: Schema.optional(Schema.Boolean),
     runSetupScript: Schema.optional(Schema.Boolean),
   }),
 ]);

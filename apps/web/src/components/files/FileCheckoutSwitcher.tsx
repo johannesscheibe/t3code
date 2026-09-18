@@ -181,7 +181,6 @@ export function FileCheckoutSwitcher({
           environmentId={environmentId}
           threadId={thread.id}
           projects={attachableProjects}
-          defaultBranch={threadCheckouts.defaultBranch}
           defaultMode={threadCheckouts.defaultAttachMode}
           onClose={() => setDialogOpen(false)}
         />

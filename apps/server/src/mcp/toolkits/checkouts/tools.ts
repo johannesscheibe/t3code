@@ -106,7 +106,7 @@ export const AttachCheckoutInput = Schema.Struct({
   branch: Schema.optional(
     TrimmedNonEmptyString.annotate({
       description:
-        "Worktree mode only: branch to create. Defaults to this thread's branch so related changes share a name. Pass one during the thread's first turn, while its branch has only a placeholder name.",
+        "Worktree mode only: branch to create. Defaults to this thread's branch so related changes share a name, or to a placeholder name when that is taken or the thread's own branch is still a placeholder.",
     }),
   ),
   baseBranch: Schema.optional(

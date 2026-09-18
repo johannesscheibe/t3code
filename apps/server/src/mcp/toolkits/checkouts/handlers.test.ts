@@ -121,6 +121,8 @@ function makeThread(overrides: Partial<OrchestrationThreadShell> = {}): Orchestr
 interface HarnessOptions {
   readonly thread?: OrchestrationThreadShell;
   readonly projects?: ReadonlyArray<OrchestrationProjectShell>;
+  /** Branches the attached project's repository already has. */
+  readonly existingBranches?: ReadonlyArray<string>;
 }
 
 const makeHarness = Effect.fn("makeCheckoutsToolkitHarness")(function* (
@@ -171,6 +173,10 @@ const makeHarness = Effect.fn("makeCheckoutsToolkitHarness")(function* (
     }),
     Layer.mock(GitWorkflowService)({
       status: () => Effect.succeed({ isRepo: true, refName: "main" } as VcsStatusResult),
+      hasCommit: ({ refName }) =>
+        Effect.succeed(
+          (options.existingBranches ?? []).some((branch) => refName === `refs/heads/${branch}`),
+        ),
       createWorktree: (input) =>
         Ref.update(createdWorktrees, (recorded) => [...recorded, input]).pipe(
           Effect.as({
@@ -307,15 +313,22 @@ describe("checkouts toolkit handlers", () => {
     }),
   );
 
-  it.effect("asks for a branch instead of copying a first-turn placeholder branch", () =>
-    Effect.gen(function* () {
-      const harness = yield* makeHarness({ thread: makeThread({ branch: "t3code/1a2b3c4d" }) });
-      const error = yield* harness.call("attach_checkout", { project: "Lib" }).pipe(Effect.flip);
-      expect(error).toMatchObject({ _tag: "CheckoutAttachFailedError" });
-      expect(error.message).toContain("Pass a branch name");
-      expect(yield* Ref.get(harness.createdWorktrees)).toEqual([]);
-      expect(yield* Ref.get(harness.commands)).toEqual([]);
-    }),
+  it.effect(
+    "names the worktree with a placeholder instead of copying a placeholder or taken branch",
+    () =>
+      Effect.gen(function* () {
+        const placeholder = yield* makeHarness({
+          thread: makeThread({ branch: "t3code/1a2b3c4d" }),
+        });
+        yield* placeholder.call("attach_checkout", { project: "Lib" });
+        const taken = yield* makeHarness({ existingBranches: ["feat/shared-change"] });
+        yield* taken.call("attach_checkout", { project: "Lib" });
+        for (const harness of [placeholder, taken]) {
+          const [created] = yield* Ref.get(harness.createdWorktrees);
+          expect(created?.newRefName).toMatch(/^t3code\/[0-9a-f]{8}$/);
+          expect(created?.newRefName).not.toBe("t3code/1a2b3c4d");
+        }
+      }),
   );
 
   it.effect("resolves a project by its workspace root and rejects ambiguous titles", () =>
