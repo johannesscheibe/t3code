@@ -685,6 +685,61 @@ describe("CheckpointReactor", () => {
     }),
   );
 
+  effectIt.effect("captures attached checkout changes before turn completion receipts", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() =>
+        createHarness({ seedFilesystemCheckpoints: false }),
+      );
+      const threadId = ThreadId.make("thread-1");
+      const turnId = asTurnId("turn-attached-capture");
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const libraryCwd = createGitRepository();
+      tempDirs.push(libraryCwd);
+      const projectId = yield* Effect.promise(() => harness.registerAttachedProject(libraryCwd));
+      const attach = yield* harness.makeAttach();
+      const { checkout } = yield* attach(
+        { threadId, projectId, target: { type: "local" } },
+        "manual",
+      );
+      harness.provider.emit({
+        type: "turn.started",
+        eventId: EventId.make("evt-attached-capture-start"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt,
+        threadId,
+        turnId,
+      });
+      expect(yield* harness.nextReceipt).toMatchObject({ type: "checkpoint.baseline.captured" });
+      NodeFS.writeFileSync(NodePath.join(libraryCwd, "README.md"), "library changed\n");
+      harness.provider.emit({
+        type: "turn.completed",
+        eventId: EventId.make("evt-attached-capture-complete"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt,
+        threadId,
+        turnId,
+        payload: { state: "completed" },
+      });
+      expect(yield* harness.nextReceipt).toMatchObject({ type: "checkpoint.diff.finalized" });
+      expect(yield* harness.nextReceipt).toMatchObject({ type: "turn.processing.quiesced" });
+      expect(
+        gitShowFileAtRef(
+          libraryCwd,
+          checkpointRefForThreadCheckoutTurn(threadId, checkout.checkpointId, 1),
+          "README.md",
+        ),
+      ).toBe("library changed\n");
+      const query = yield* harness.makeDiffQuery;
+      const diff = yield* query.getTurnDiff({
+        threadId,
+        checkoutProjectId: projectId,
+        fromTurnCount: 0,
+        toTurnCount: 1,
+      });
+      expect(diff).toMatchObject({ diff: expect.stringContaining("+library changed") });
+    }),
+  );
+
   effectIt.effect("captures and reverts checkpoints from a nested Git workspace", () =>
     Effect.gen(function* () {
       const repositoryRoot = createGitRepository();

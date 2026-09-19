@@ -317,8 +317,8 @@ export function AttachCheckoutDialog({
         <DialogHeader>
           <DialogTitle>Attach checkout</DialogTitle>
           <DialogDescription>
-            Work on another project from this thread. The agent gets access to the checkout on its
-            next turn.
+            Work on another project from this thread. The agent gets access on its next turn.
+            Cursor, Grok, and OpenCode may ask you to approve access.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-4">

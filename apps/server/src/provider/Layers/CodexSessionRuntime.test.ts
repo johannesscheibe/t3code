@@ -180,22 +180,19 @@ describe("buildTurnStartParams", () => {
     NodeAssert.doesNotMatch(JSON.stringify(directDiagnostics), new RegExp(secret));
   });
 
-  it("grants attached worktrees as writable roots on workspace-write turns", () => {
-    const params = Effect.runSync(
-      buildTurnStartParams({
+  it.effect("grants attached worktrees as writable roots on workspace-write turns", () =>
+    Effect.gen(function* () {
+      const params = yield* buildTurnStartParams({
         threadId: "provider-thread-1",
         runtimeMode: "auto-accept-edits",
         prompt: "Update both repositories",
         writableRoots: ["/worktrees/lib"],
-      }),
-    );
+      });
 
-    NodeAssert.equal(params.sandboxPolicy?.type, "workspaceWrite");
-    NodeAssert.deepStrictEqual(
-      (params.sandboxPolicy as { readonly writableRoots?: ReadonlyArray<string> }).writableRoots,
-      ["/worktrees/lib"],
-    );
-  });
+      NodeAssert.equal(params.sandboxPolicy?.type, "workspaceWrite");
+      NodeAssert.deepStrictEqual(params.sandboxPolicy.writableRoots, ["/worktrees/lib"]);
+    }),
+  );
 
   it("includes plan collaboration mode when requested", () => {
     const params = Effect.runSync(
