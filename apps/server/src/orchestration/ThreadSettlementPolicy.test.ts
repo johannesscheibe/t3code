@@ -20,6 +20,7 @@ const makeThread = (
   runtimeMode: "full-access",
   interactionMode: "default",
   pullRequests: [],
+  checkouts: [],
   branch: "feature",
   worktreePath: "/repo",
   latestTurn: null,

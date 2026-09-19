@@ -27,6 +27,7 @@ import { AndroidSheetHeader } from "../../../components/AndroidScreenHeader";
 import { AppText as Text } from "../../../components/AppText";
 import { nativeHeaderScrollEdgeEffects } from "../../../native/StackHeader";
 import { tryOpenExternalUrl } from "../../../lib/openExternalUrl";
+import { useProjects } from "../../../state/entities";
 import { useEnvironmentQuery } from "../../../state/query";
 import { useThreadSelection } from "../../../state/use-thread-selection";
 import { useSelectedThreadGitActions } from "../../../state/use-selected-thread-git-actions";
@@ -64,6 +65,8 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
       ),
     [selectedThread?.pullRequests, supportsLinkedPrSnapshots],
   );
+  const projects = useProjects();
+  const attachedCheckouts = selectedThread?.checkouts ?? [];
   const gitState = useSelectedThreadGitState();
   const gitActions = useSelectedThreadGitActions();
   const theme = useUniwindTheme();
@@ -339,6 +342,51 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
               ))}
             </View>
           ))}
+        </View>
+      ) : null}
+
+      {attachedCheckouts.length > 0 ? (
+        <View className="gap-2">
+          <Text className="px-1 text-xs font-t3-bold text-foreground-muted">
+            Attached checkouts
+          </Text>
+          <View className="overflow-hidden rounded-2xl border border-border bg-card px-3 py-1">
+            {attachedCheckouts.map((checkout, index) => {
+              const project = projects.find(
+                (candidate) =>
+                  candidate.environmentId === selectedThread?.environmentId &&
+                  candidate.id === checkout.projectId,
+              );
+              const title = project?.title ?? checkout.projectId;
+              const directory = checkout.worktreePath ?? project?.workspaceRoot ?? "";
+              const pullRequest = checkout.pullRequest;
+              return (
+                <View key={checkout.projectId}>
+                  {index > 0 ? <View className="ml-12 h-px bg-border" /> : null}
+                  <SheetListRow
+                    icon={
+                      pullRequest
+                        ? "arrow.triangle.pull"
+                        : "point.topleft.down.curvedto.point.bottomright.up"
+                    }
+                    title={checkout.branch ? `${title} · ${checkout.branch}` : title}
+                    subtitle={
+                      pullRequest
+                        ? `#${pullRequest.number} ${pullRequest.state} · ${directory}`
+                        : directory
+                    }
+                    onPress={() => {
+                      if (!pullRequest) return;
+                      void tryOpenExternalUrl(pullRequest.url, "pull-request").then((opened) => {
+                        if (!opened)
+                          Alert.alert("Unable to open PR", "The pull request could not be opened.");
+                      });
+                    }}
+                  />
+                </View>
+              );
+            })}
+          </View>
         </View>
       ) : null}
 

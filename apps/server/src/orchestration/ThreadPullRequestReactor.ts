@@ -8,6 +8,7 @@ import {
   type OrchestrationProjectShell,
   type ThreadId,
   type ThreadLinkedPullRequest,
+  type OrchestrationThreadShell,
 } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
@@ -93,6 +94,102 @@ export const make = Effect.gen(function* () {
       else pendingBackfill.set(thread.id, remaining - 1);
     }
   };
+
+  // Attached checkouts get the same branch discovery against their own
+  // project. The result lives on the checkout, beside the thread's own branch PR.
+  const synchronizeAttachedCheckouts = Effect.fn(
+    "ThreadPullRequestReactor.synchronizeAttachedCheckouts",
+  )(function* (
+    request: RefreshRequest,
+    threads: ReadonlyArray<OrchestrationThreadShell>,
+    projects: ReadonlyMap<string, OrchestrationProjectShell>,
+  ) {
+    const entries = threads.flatMap((thread) =>
+      thread.archivedAt === null &&
+      (request.threadId === null || thread.id === request.threadId) &&
+      ((thread.settledOverride !== "settled" && thread.settledAt === null) ||
+        request.threadId !== null)
+        ? thread.checkouts.flatMap((checkout) => {
+            const project = projects.get(checkout.projectId);
+            return project === undefined || checkout.branch === null
+              ? []
+              : [
+                  {
+                    thread,
+                    checkout,
+                    project,
+                    branch: checkout.branch,
+                    cwd: checkout.worktreePath ?? project.workspaceRoot,
+                  },
+                ];
+          })
+        : [],
+    );
+    const groups = Map.groupBy(entries, ({ project, cwd, branch }) =>
+      JSON.stringify([project.id, cwd, branch]),
+    );
+    yield* Effect.forEach(
+      groups.values(),
+      (group) =>
+        Effect.gen(function* () {
+          const { project, cwd, branch } = group[0]!;
+          if (!(yield* fileSystem.exists(cwd))) {
+            return;
+          }
+          const detected = yield* git.branchPullRequest(
+            { cwd, branch },
+            { refresh: request.refresh },
+          );
+          const found =
+            detected !== null && pullRequestMatchesProject(detected, project)
+              ? { number: detected.number, url: detected.url, state: detected.state }
+              : null;
+          yield* Effect.forEach(
+            group,
+            ({ thread, checkout }) =>
+              Effect.gen(function* () {
+                const previous = checkout.pullRequest;
+                // A merged or closed pull request stays once its branch is gone.
+                const pullRequest =
+                  found ?? (previous !== null && previous.state !== "open" ? previous : null);
+                if (
+                  previous?.number === pullRequest?.number &&
+                  previous?.url === pullRequest?.url &&
+                  previous?.state === pullRequest?.state
+                ) {
+                  return;
+                }
+                const uuid = yield* crypto.randomUUIDv4;
+                yield* engine.dispatch({
+                  type: "thread.checkout.sync",
+                  commandId: CommandId.make(
+                    `server:thread-checkout-pull-request:${thread.id}:${uuid}`,
+                  ),
+                  threadId: thread.id,
+                  projectId: checkout.projectId,
+                  expectedBranch: checkout.branch,
+                  branch: checkout.branch,
+                  pullRequest,
+                });
+              }).pipe(
+                // The checkout changed since the lookup. Its own events requeue it.
+                Effect.catchTags({ OrchestrationCommandInvariantError: () => Effect.void }),
+              ),
+            { discard: true },
+          );
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.failCause(cause)
+              : Effect.logWarning("attached checkout pull request lookup failed", {
+                  cwd: group[0]!.cwd,
+                  cause: Cause.pretty(cause),
+                }),
+          ),
+        ),
+      { concurrency: 8, discard: true },
+    );
+  });
 
   const synchronize = Effect.fn("ThreadPullRequestReactor.synchronize")(function* (
     request: RefreshRequest,
@@ -296,6 +393,7 @@ export const make = Effect.gen(function* () {
         ),
       { concurrency: 8, discard: true },
     );
+    yield* synchronizeAttachedCheckouts(request, snapshot.threads, projects);
   });
 
   const worker = yield* makeDrainableWorker((request: RefreshRequest) =>

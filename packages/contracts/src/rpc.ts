@@ -3,6 +3,11 @@ import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
+  ThreadCheckoutAttachError,
+  ThreadCheckoutAttachInput,
+  ThreadCheckoutAttachResult,
+} from "./threadCheckout.ts";
+import {
   ProviderAuthCancelInput,
   ProviderAuthCompleteInput,
   ProviderAuthState,
@@ -302,6 +307,7 @@ export const WS_METHODS = {
   vcsListRefs: "vcs.listRefs",
   vcsCreateWorktree: "vcs.createWorktree",
   vcsRemoveWorktree: "vcs.removeWorktree",
+  vcsAttachThreadCheckout: "vcs.attachThreadCheckout",
   vcsCreateRef: "vcs.createRef",
   vcsSwitchRef: "vcs.switchRef",
   vcsInit: "vcs.init",
@@ -997,6 +1003,12 @@ const WsVcsRemoveWorktreeRpc = Rpc.make(WS_METHODS.vcsRemoveWorktree, {
   error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
 });
 
+const WsVcsAttachThreadCheckoutRpc = Rpc.make(WS_METHODS.vcsAttachThreadCheckout, {
+  payload: ThreadCheckoutAttachInput,
+  success: ThreadCheckoutAttachResult,
+  error: Schema.Union([ThreadCheckoutAttachError, EnvironmentAuthorizationError]),
+});
+
 const WsVcsCreateRefRpc = Rpc.make(WS_METHODS.vcsCreateRef, {
   payload: VcsCreateRefInput,
   success: VcsCreateRefResult,
@@ -1403,6 +1415,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsVcsListRefsRpc,
   WsVcsCreateWorktreeRpc,
   WsVcsRemoveWorktreeRpc,
+  WsVcsAttachThreadCheckoutRpc,
   WsVcsCreateRefRpc,
   WsVcsSwitchRefRpc,
   WsVcsInitRpc,

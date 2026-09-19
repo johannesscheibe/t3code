@@ -83,6 +83,11 @@ interface AnnotatableCodeViewProps {
   sectionId: string;
   sectionTitle: string;
   composerDraftTarget: ScopedThreadRef | DraftId;
+  /**
+   * Directory the diff's paths are relative to when it is not the thread's own
+   * workspace. Comments then carry the full path, so the agent edits the right checkout.
+   */
+  commentPathRoot?: string;
   options: StyledDiffCodeViewOptions<DiffCommentAnnotationGroup>;
   viewerRef?: Ref<AnnotatableCodeViewHandle>;
   className?: string;
@@ -104,12 +109,17 @@ export function AnnotatableCodeView({
   sectionId,
   sectionTitle,
   composerDraftTarget,
+  commentPathRoot,
   options,
   viewerRef,
   className,
   renderHeaderFilenameSuffix,
   renderHeaderPrefix,
 }: AnnotatableCodeViewProps) {
+  const commentPath = useCallback(
+    (filePath: string) => (commentPathRoot ? `${commentPathRoot}/${filePath}` : filePath),
+    [commentPathRoot],
+  );
   const addReviewComment = useComposerDraftStore((store) => store.addReviewComment);
   const removeReviewComment = useComposerDraftStore((store) => store.removeReviewComment);
   const reviewComments = useComposerDraftStore(
@@ -133,7 +143,7 @@ export function AnnotatableCodeView({
           .filter(
             (comment) =>
               comment.sectionId === sectionId &&
-              comment.filePath === filePath &&
+              comment.filePath === commentPath(filePath) &&
               (comment.fenceLanguage ?? "diff") === "diff",
           )
           .reduce<DiffCommentLineAnnotation[]>((annotations, comment) => {
@@ -166,7 +176,7 @@ export function AnnotatableCodeView({
           ),
         };
       }),
-    [draft, files, reviewComments, sectionId],
+    [commentPath, draft, files, reviewComments, sectionId],
   );
 
   const removeEntry = useCallback(
@@ -193,7 +203,7 @@ export function AnnotatableCodeView({
         id: entry.id,
         sectionId,
         sectionTitle,
-        filePath: file.filePath,
+        filePath: commentPath(file.filePath),
         fileDiff: file.fileDiff,
         range: entry.range,
         text,
@@ -203,7 +213,15 @@ export function AnnotatableCodeView({
       setDraft(null);
       setDraftText("");
     },
-    [addReviewComment, composerDraftTarget, draft, filesByKey, sectionId, sectionTitle],
+    [
+      addReviewComment,
+      commentPath,
+      composerDraftTarget,
+      draft,
+      filesByKey,
+      sectionId,
+      sectionTitle,
+    ],
   );
 
   const beginComment = useCallback(
@@ -218,7 +236,7 @@ export function AnnotatableCodeView({
         id,
         sectionId,
         sectionTitle,
-        filePath: file.filePath,
+        filePath: commentPath(file.filePath),
         fileDiff: file.fileDiff,
         range,
         text: "",
@@ -236,7 +254,7 @@ export function AnnotatableCodeView({
         },
       });
     },
-    [filesByKey, sectionId, sectionTitle],
+    [commentPath, filesByKey, sectionId, sectionTitle],
   );
 
   const hasOpenComment = draft !== null;

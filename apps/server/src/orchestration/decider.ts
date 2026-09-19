@@ -1109,6 +1109,194 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.checkout.attach": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const project = yield* requireProject({
+        readModel,
+        command,
+        projectId: command.projectId,
+      });
+      if (command.projectId === thread.projectId) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `thread ${command.threadId} already works in project ${command.projectId}; attach a checkout of a different project`,
+        });
+      }
+      // One checkout per project, so the project identifies it for the user,
+      // the agent, and every command that addresses it.
+      if (thread.checkouts.some((checkout) => checkout.projectId === command.projectId)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `thread ${command.threadId} already has a checkout of project ${command.projectId} attached`,
+        });
+      }
+      const occurredAt = yield* nowIso;
+      const attachedEvent = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.checkout-attached" as const,
+        payload: {
+          threadId: command.threadId,
+          checkout: {
+            projectId: command.projectId,
+            worktreePath: command.worktreePath,
+            branch: command.branch,
+            pullRequest: null,
+            source: command.source,
+            attachedAt: occurredAt,
+            checkpointId: command.checkpointId,
+          },
+          updatedAt: occurredAt,
+        },
+      };
+      const directory = command.worktreePath ?? project.workspaceRoot;
+      const attachedActivity = yield* decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "thread.activity.append",
+          commandId: command.commandId,
+          threadId: command.threadId,
+          createdAt: occurredAt,
+          activity: {
+            id: EventId.make(`checkout-attached:${command.commandId}`),
+            kind: "checkout.attached",
+            summary: `Attached ${project.title} checkout`,
+            tone: "info",
+            turnId: null,
+            createdAt: occurredAt,
+            payload: {
+              projectId: command.projectId,
+              worktreePath: command.worktreePath,
+              branch: command.branch,
+              source: command.source,
+              detail: command.branch ? `${directory} (${command.branch})` : directory,
+            },
+          },
+        },
+      });
+      return [
+        attachedEvent,
+        ...(Array.isArray(attachedActivity) ? attachedActivity : [attachedActivity]),
+      ];
+    }
+
+    case "thread.checkout.sync": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const existing = thread.checkouts.find(
+        (checkout) => checkout.projectId === command.projectId,
+      );
+      if (existing === undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `project ${command.projectId} has no checkout attached to thread ${command.threadId}`,
+        });
+      }
+      if (command.expectedBranch !== undefined && existing.branch !== command.expectedBranch) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `checkout of project ${command.projectId} on thread ${command.threadId} left branch ${command.expectedBranch}`,
+        });
+      }
+      if (
+        existing.branch === command.branch &&
+        existing.pullRequest?.number === command.pullRequest?.number &&
+        existing.pullRequest?.url === command.pullRequest?.url &&
+        existing.pullRequest?.state === command.pullRequest?.state
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `checkout of project ${command.projectId} on thread ${command.threadId} is unchanged`,
+        });
+      }
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.checkout-attached",
+        payload: {
+          threadId: command.threadId,
+          checkout: { ...existing, branch: command.branch, pullRequest: command.pullRequest },
+          updatedAt: occurredAt,
+        },
+      };
+    }
+
+    case "thread.checkout.detach": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const existing = thread.checkouts.find(
+        (checkout) => checkout.projectId === command.projectId,
+      );
+      if (existing === undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `project ${command.projectId} has no checkout attached to thread ${command.threadId}`,
+        });
+      }
+      const occurredAt = yield* nowIso;
+      const detachedEvent = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.checkout-detached" as const,
+        payload: {
+          threadId: command.threadId,
+          projectId: existing.projectId,
+          updatedAt: occurredAt,
+        },
+      };
+      const project = readModel.projects.find((entry) => entry.id === existing.projectId);
+      const directory = existing.worktreePath ?? project?.workspaceRoot ?? existing.projectId;
+      const detachedActivity = yield* decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "thread.activity.append",
+          commandId: command.commandId,
+          threadId: command.threadId,
+          createdAt: occurredAt,
+          activity: {
+            id: EventId.make(`checkout-detached:${command.commandId}`),
+            kind: "checkout.detached",
+            summary: `Detached ${project?.title ?? existing.projectId} checkout`,
+            tone: "info",
+            turnId: null,
+            createdAt: occurredAt,
+            payload: {
+              projectId: existing.projectId,
+              worktreePath: existing.worktreePath,
+              detail: directory,
+            },
+          },
+        },
+      });
+      return [
+        detachedEvent,
+        ...(Array.isArray(detachedActivity) ? detachedActivity : [detachedActivity]),
+      ];
+    }
+
     case "thread.pull-request-link.sync": {
       const thread = yield* requireThread({
         readModel,

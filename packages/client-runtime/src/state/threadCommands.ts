@@ -11,6 +11,7 @@ import {
   type ArchiveThreadInput,
   type CreateThreadInput,
   type DeleteThreadInput,
+  type DetachThreadCheckoutInput,
   type InterruptThreadTurnInput,
   type LinkThreadPullRequestInput,
   type RespondToThreadApprovalInput,
@@ -35,6 +36,7 @@ import {
   archiveThread,
   createThread,
   deleteThread,
+  detachThreadCheckout,
   interruptThreadTurn,
   linkThreadPullRequest,
   respondToThreadApproval,
@@ -183,6 +185,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     unlinkPullRequest: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:unlink-pull-request",
       execute: (input: UnlinkThreadPullRequestInput) => unlinkThreadPullRequest(input),
+      scheduler,
+      concurrency,
+    }),
+    detachCheckout: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:detach-checkout",
+      execute: (input: DetachThreadCheckoutInput) => detachThreadCheckout(input),
       scheduler,
       concurrency,
     }),

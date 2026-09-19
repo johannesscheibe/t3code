@@ -109,4 +109,19 @@ describe("createFileTreeDragMentionController", () => {
     controller.handleDragEnd();
     expect(deselected).toEqual([]);
   });
+
+  it("mentions rows by absolute path when the tree shows an attached worktree", () => {
+    const controller = createFileTreeDragMentionController({
+      deselect: () => {},
+      mentionRoot: "/worktrees/api",
+    });
+    const transfer = makeTransfer();
+    controller.handleDragStart({
+      dataTransfer: transfer,
+      composedPath: () => [rowNode("src/app.ts")],
+    });
+    expect(transfer.getData(COMPOSER_MENTION_DRAG_TYPE)).toBe(
+      "[app.ts](/worktrees/api/src/app.ts)",
+    );
+  });
 });

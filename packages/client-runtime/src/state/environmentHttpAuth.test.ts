@@ -85,6 +85,7 @@ const THREAD = {
     interactionMode: "default",
     branch: null,
     pullRequests: [],
+    checkouts: [],
     worktreePath: null,
     latestTurn: null,
     createdAt: "2026-09-04T00:00:00.000Z",

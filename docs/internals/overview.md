@@ -81,6 +81,12 @@ capture workspace state without adding commits to the user's branch. A revert mu
 workspace state with the provider conversation. A provider that cannot roll back its conversation
 must reject that operation before changing the filesystem.
 
+Checkouts attached from other projects keep their own refs, named by thread, attachment, and turn
+in [checkpoint utilities](../../apps/server/src/checkpointing/Utils.ts), so threads that share a
+checkout never overwrite each other's refs. The turn summary and its file list still describe only
+the thread's own workspace. A checkout gets a baseline when it is attached, and revert restores it
+to the target turn or, if it was attached later, to that attach baseline.
+
 ## Waiting for asynchronous work
 
 Tests use [drainable workers](../../packages/shared/src/DrainableWorker.ts) to wait until both the

@@ -9,6 +9,39 @@ export function checkpointRefForThreadTurn(threadId: ThreadId, turnCount: number
   );
 }
 
+/**
+ * Checkpoint ref for a checkout attached to a thread, written in the checkout's
+ * repository. The attachment's checkpoint ID keeps refs apart when threads share
+ * a checkout, and lets a detached checkout start a fresh baseline when reattached.
+ */
+export function checkpointRefForThreadCheckoutTurn(
+  threadId: ThreadId,
+  checkpointId: string,
+  turnCount: number,
+): CheckpointRef {
+  return CheckpointRef.make(
+    `${checkpointRefPrefixForThreadCheckout(threadId, checkpointId)}${turnCount}`,
+  );
+}
+
+/** Ref prefix holding every turn ref of one attachment, for listing them in one Git call. */
+export function checkpointRefPrefixForThreadCheckout(
+  threadId: ThreadId,
+  checkpointId: string,
+): string {
+  return `${CHECKPOINT_REFS_PREFIX}/${Encoding.encodeBase64Url(threadId)}/checkout/${Encoding.encodeBase64Url(checkpointId)}/turn/`;
+}
+
+/** Turn counts of the refs listed below an attachment's prefix, ascending. */
+export function turnCountsOfCheckpointRefs(
+  checkpointRefs: ReadonlyArray<CheckpointRef>,
+): ReadonlyArray<number> {
+  return checkpointRefs
+    .map((checkpointRef) => Number(checkpointRef.slice(checkpointRef.lastIndexOf("/") + 1)))
+    .filter(Number.isInteger)
+    .toSorted((left, right) => left - right);
+}
+
 export function resolveThreadWorkspaceCwd(input: {
   readonly thread: {
     readonly projectId: ProjectId;

@@ -100,6 +100,7 @@ const THREAD_SHELL = {
   settledOverride: null,
   settledAt: null,
   pullRequests: [],
+  checkouts: [],
   session: null,
   latestUserMessageAt: null,
   hasPendingApprovals: false,
@@ -213,6 +214,17 @@ describe("environment entity projections", () => {
       title: "Cached thread",
       branch: "stale-branch",
       worktreePath: "/repo/stale-worktree",
+      checkouts: [
+        {
+          projectId: OTHER_PROJECT_ID,
+          worktreePath: "/repo/detached-library",
+          branch: null,
+          pullRequest: null,
+          source: "agent",
+          attachedAt: "2026-03-09T10:00:00.000Z",
+          checkpointId: "checkpoint-stale",
+        },
+      ],
       activeOrderKey: "t",
       unsettledAt: "2026-03-09T10:00:00.000Z",
       deletedAt: null,
@@ -227,6 +239,17 @@ describe("environment entity projections", () => {
       title: "Current thread",
       branch: "current-branch",
       worktreePath: "/repo/current-worktree",
+      checkouts: [
+        {
+          projectId: OTHER_PROJECT_ID,
+          worktreePath: null,
+          branch: "current-branch",
+          pullRequest: null,
+          source: "manual" as const,
+          attachedAt: "2026-03-09T12:00:00.000Z",
+          checkpointId: "checkpoint-current",
+        },
+      ],
       activeOrderKey: "f",
       unsettledAt: "2026-03-09T12:00:00.000Z",
     };
@@ -240,6 +263,7 @@ describe("environment entity projections", () => {
       activeOrderKey: "f",
       unsettledAt: "2026-03-09T12:00:00.000Z",
     });
+    expect(merged?.checkouts).toEqual(shell.checkouts);
     expect(merged?.messages).toBe(messages);
   });
 

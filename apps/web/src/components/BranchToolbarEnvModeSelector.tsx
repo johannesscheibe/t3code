@@ -8,6 +8,7 @@ import {
   type EnvMode,
 } from "./BranchToolbar.logic";
 import { composerFloatingLayerProps } from "./chat/composerEventScope";
+import { ThreadWorkspaceMenu, type WorkspaceMenuThread } from "./ThreadWorkspaceMenu";
 import {
   Select,
   SelectGroup,
@@ -27,6 +28,8 @@ interface BranchToolbarEnvModeSelectorProps {
   onEnvModeChange: (mode: EnvMode) => void;
   previousWorktreeLabel?: string | null;
   onUsePreviousWorktree?: () => void;
+  /** Started thread whose locked label opens its checkout menu. */
+  workspaceThread?: WorkspaceMenuThread;
 }
 
 export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSelector({
@@ -36,6 +39,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
   onEnvModeChange,
   previousWorktreeLabel,
   onUsePreviousWorktree,
+  workspaceThread,
 }: BranchToolbarEnvModeSelectorProps) {
   const showPreviousWorktree = Boolean(previousWorktreeLabel && onUsePreviousWorktree);
   const envModeItems = useMemo(
@@ -50,12 +54,11 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
   );
 
   if (envLocked) {
-    return (
-      <span
-        className="inline-flex h-7 min-w-0 items-center gap-1 border border-transparent px-[calc(--spacing(2)-1px)] font-normal text-muted-foreground/70 text-xs sm:h-6"
-        data-composer-context-control
-      >
-        {activeWorktreePath ? (
+    const lockedContent = (
+      <>
+        {effectiveEnvMode === "worktree" ? (
+          <FolderGit2Icon className="size-3 shrink-0" />
+        ) : activeWorktreePath ? (
           <FolderGitIcon className="size-3 shrink-0" />
         ) : (
           <FolderIcon className="size-3 shrink-0" />
@@ -71,7 +74,26 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
             {resolveLockedWorkspaceLabel(activeWorktreePath)}
           </span>
         </span>
+      </>
+    );
+    const lockedLabel = (
+      <span
+        className="inline-flex h-7 min-w-0 items-center gap-1 border border-transparent px-[calc(--spacing(2)-1px)] font-normal text-muted-foreground/70 text-xs sm:h-6"
+        data-composer-context-control
+      >
+        {lockedContent}
       </span>
+    );
+    return workspaceThread ? (
+      <ThreadWorkspaceMenu
+        workspaceThread={workspaceThread}
+        className="min-w-0 shrink font-normal text-muted-foreground/70 text-xs! hover:text-foreground/80"
+        fallback={lockedLabel}
+      >
+        {lockedContent}
+      </ThreadWorkspaceMenu>
+    ) : (
+      lockedLabel
     );
   }
 

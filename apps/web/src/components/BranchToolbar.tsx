@@ -28,6 +28,7 @@ import {
 import { BranchToolbarBranchSelector } from "./BranchToolbarBranchSelector";
 import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSelector";
 import { BranchToolbarEnvModeSelector } from "./BranchToolbarEnvModeSelector";
+import { ThreadWorkspaceMenu, type WorkspaceMenuThread } from "./ThreadWorkspaceMenu";
 import { Button } from "./ui/button";
 import {
   Menu,
@@ -83,6 +84,7 @@ interface MobileRunContextSelectorProps {
   onEnvModeChange: (mode: EnvMode) => void;
   previousWorktreeLabel: string | null;
   onUsePreviousWorktree: () => void;
+  workspaceThread?: WorkspaceMenuThread;
 }
 
 const MobileRunContextSelector = memo(function MobileRunContextSelector({
@@ -100,6 +102,7 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
   onEnvModeChange,
   previousWorktreeLabel,
   onUsePreviousWorktree,
+  workspaceThread,
 }: MobileRunContextSelectorProps) {
   const activeEnvironment = useMemo(
     () => availableEnvironments?.find((env) => env.environmentId === environmentId) ?? null,
@@ -153,13 +156,24 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
   );
 
   if (isLocked) {
-    return (
+    const lockedLabel = (
       <span
         className="inline-flex h-7 min-w-0 max-w-[48%] flex-initial items-center justify-start gap-1 rounded-md border border-transparent px-[calc(--spacing(2)-1px)] font-normal text-muted-foreground/70 text-xs sm:h-6"
         data-composer-context-control
       >
         {triggerContent}
       </span>
+    );
+    return workspaceThread ? (
+      <ThreadWorkspaceMenu
+        workspaceThread={workspaceThread}
+        className="min-w-0 max-w-[48%] flex-initial justify-start font-normal text-muted-foreground/70 text-xs! hover:text-foreground/80"
+        fallback={lockedLabel}
+      >
+        {triggerContent}
+      </ThreadWorkspaceMenu>
+    ) : (
+      lockedLabel
     );
   }
 
@@ -483,6 +497,36 @@ export const BranchToolbar = memo(function BranchToolbar({
       draftThreadEnvMode: draftThread?.envMode,
     });
   const envModeLocked = envLocked || (serverThread !== null && activeWorktreePath !== null);
+  // The shell changes identity throughout a turn. The menu reads only these fields,
+  // so the memoized selector below keeps its props while a turn streams.
+  const serverThreadId = serverThread?.id;
+  const serverThreadProjectId = serverThread?.projectId;
+  const serverThreadBranch = serverThread?.branch ?? null;
+  const serverThreadWorktreePath = serverThread?.worktreePath ?? null;
+  const serverThreadCheckouts = serverThread?.checkouts;
+  const workspaceThread = useMemo(
+    () =>
+      serverThreadId && serverThreadProjectId && serverThreadCheckouts
+        ? {
+            ref: threadRef,
+            shell: {
+              id: serverThreadId,
+              projectId: serverThreadProjectId,
+              branch: serverThreadBranch,
+              worktreePath: serverThreadWorktreePath,
+              checkouts: serverThreadCheckouts,
+            },
+          }
+        : null,
+    [
+      serverThreadBranch,
+      serverThreadCheckouts,
+      serverThreadId,
+      serverThreadProjectId,
+      serverThreadWorktreePath,
+      threadRef,
+    ],
+  );
 
   // "Previous worktree" hops a draft into the most recently active worktree
   // of this project — the "keep going where I just was" follow-up flow. Only
@@ -561,6 +605,7 @@ export const BranchToolbar = memo(function BranchToolbar({
             onEnvModeChange={onEnvModeChange}
             previousWorktreeLabel={previousWorktreeLabel}
             onUsePreviousWorktree={onUsePreviousWorktree}
+            {...(workspaceThread ? { workspaceThread } : {})}
           />
         </div>
       ) : null}
@@ -599,6 +644,7 @@ export const BranchToolbar = memo(function BranchToolbar({
               onEnvModeChange={onEnvModeChange}
               previousWorktreeLabel={previousWorktreeLabel}
               onUsePreviousWorktree={onUsePreviousWorktree}
+              {...(workspaceThread ? { workspaceThread } : {})}
             />
           ) : null}
         </div>
