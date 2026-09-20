@@ -3527,19 +3527,26 @@ export default function ChatView(props: ChatViewProps) {
   const renderedFilesCheckout =
     renderedRightPanelSurface?.kind === "file" || renderedRightPanelSurface?.kind === "files"
       ? ((activeThread?.checkouts ?? []).flatMap((checkout) => {
-          const directory =
-            checkout.worktreePath ??
-            allProjects.find(
-              (project) =>
-                project.environmentId === activeThread?.environmentId &&
-                project.id === checkout.projectId,
-            )?.workspaceRoot;
+          const project = allProjects.find(
+            (project) =>
+              project.environmentId === activeThread?.environmentId &&
+              project.id === checkout.projectId,
+          );
+          const directory = checkout.worktreePath ?? project?.workspaceRoot;
           if (directory === undefined) return [];
           const shown =
             renderedRightPanelSurface.kind === "file"
               ? renderedRightPanelSurface.relativePath.startsWith(`${directory}/`)
               : checkout.projectId === renderedRightPanelSurface.checkoutProjectId;
-          return shown ? [{ projectId: checkout.projectId, directory }] : [];
+          return shown
+            ? [
+                {
+                  projectId: checkout.projectId,
+                  projectName: project?.title ?? directory,
+                  directory,
+                },
+              ]
+            : [];
         })[0] ?? null)
       : null;
   const renderedFilesCheckoutDirectory = renderedFilesCheckout?.directory ?? null;
@@ -8827,7 +8834,7 @@ export default function ChatView(props: ChatViewProps) {
           }`}
           environmentId={activeThread.environmentId}
           cwd={filesSurfaceCwd ?? ""}
-          projectName={activeProject?.title ?? ""}
+          projectName={renderedFilesCheckout?.projectName ?? activeProject?.title ?? ""}
           threadRef={activeThreadRef}
           composerDraftTarget={composerDraftTarget}
           keybindings={keybindings}
