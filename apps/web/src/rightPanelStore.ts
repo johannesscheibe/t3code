@@ -10,10 +10,12 @@
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   EnvironmentId,
+  ProjectId,
   ThreadId,
   type ChatFileAttachment,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
@@ -52,7 +54,12 @@ export type RightPanelSurface =
       splitDirection?: "horizontal" | "vertical";
     }
   | { id: "diff"; kind: "diff" }
-  | { id: "files"; kind: "files" }
+  | {
+      id: "files";
+      kind: "files";
+      /** Project of the attached checkout the tree browses; absent for the thread's own workspace. */
+      checkoutProjectId?: ProjectId;
+    }
   | {
       id: `file:${string}` | `attachment:${string}`;
       kind: "file";
@@ -131,6 +138,8 @@ interface RightPanelStoreState {
     ref: ScopedThreadRef,
     kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request">,
   ) => void;
+  /** Open the Files surface on a checkout: an attached checkout's project, or null for the workspace. */
+  openFilesCheckout: (ref: ScopedThreadRef, checkoutProjectId: ProjectId | null) => void;
   openDevice: (ref: ScopedThreadRef, target: DeviceTabTarget, automatic?: boolean) => void;
   renameDevice: (ref: ScopedThreadRef, surfaceId: string, title: string) => void;
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
@@ -400,6 +409,17 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                         }),
                       ];
                     }
+                    if (surface.kind === "files") {
+                      return [
+                        Schema.is(ProjectId)(surface.checkoutProjectId)
+                          ? {
+                              id: "files",
+                              kind: "files",
+                              checkoutProjectId: surface.checkoutProjectId,
+                            }
+                          : { id: "files", kind: "files" },
+                      ];
+                    }
                     if (surface.kind !== "terminal") return [surface];
                     if (
                       !("resourceId" in surface) ||
@@ -513,6 +533,24 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
               return upsertSurface(current, existing ?? browserSurface(null));
             }
             return upsertSurface(current, singletonSurface(kind));
+          }),
+        ),
+      openFilesCheckout: (ref, checkoutProjectId) =>
+        set((state) =>
+          userAction(state, scopedThreadKey(ref), (current) => {
+            const surface: RightPanelSurface =
+              checkoutProjectId === null
+                ? { id: "files", kind: "files" }
+                : { id: "files", kind: "files", checkoutProjectId };
+            const exists = current.surfaces.some((entry) => entry.id === "files");
+            return {
+              ...current,
+              isOpen: true,
+              surfaces: exists
+                ? current.surfaces.map((entry) => (entry.id === "files" ? surface : entry))
+                : [...current.surfaces, surface],
+              activeSurfaceId: "files",
+            };
           }),
         ),
       openDevice: (ref, target, automatic = false) =>

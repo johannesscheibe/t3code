@@ -52,6 +52,10 @@ export interface ProviderAdapterCapabilities {
   readonly promptlessTurnContinuation?: boolean;
   /** False when native conversation history cannot be rewound. */
   readonly supportsConversationRollback?: boolean;
+  /** True when the provider has no way to take extra directories. It reaches an
+      attached checkout through its own permission prompts, so a changed set of
+      attached checkouts needs no session restart. */
+  readonly ignoresAdditionalDirectories?: boolean;
 }
 
 export interface ProviderThreadTurnSnapshot {

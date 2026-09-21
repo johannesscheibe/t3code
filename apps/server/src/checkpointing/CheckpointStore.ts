@@ -42,6 +42,11 @@ export interface DiffCheckpointsInput {
   readonly format?: "patch" | "numstat";
 }
 
+export interface ListCheckpointRefsInput {
+  readonly cwd: string;
+  readonly prefix: string;
+}
+
 export interface DeleteCheckpointRefsInput {
   readonly cwd: string;
   readonly checkpointRefs: ReadonlyArray<CheckpointRef>;
@@ -67,6 +72,11 @@ export class CheckpointStore extends Context.Service<
     readonly hasCheckpointRef: (
       input: Omit<RestoreCheckpointInput, "fallbackToHead">,
     ) => Effect.Effect<boolean, CheckpointStoreError>;
+
+    /** List the checkpoint refs below a ref prefix in one Git call. */
+    readonly listCheckpointRefs: (
+      input: ListCheckpointRefsInput,
+    ) => Effect.Effect<ReadonlyArray<CheckpointRef>, CheckpointStoreError>;
 
     /**
      * Restore workspace and staging state to a checkpoint.
@@ -136,6 +146,13 @@ export const make = Effect.gen(function* () {
     return yield* checkpoints.hasCheckpointRef(input);
   });
 
+  const listCheckpointRefs: CheckpointStore["Service"]["listCheckpointRefs"] = Effect.fn(
+    "listCheckpointRefs",
+  )(function* (input) {
+    const checkpoints = yield* resolveCheckpoints("CheckpointStore.listCheckpointRefs", input.cwd);
+    return yield* checkpoints.listCheckpointRefs(input);
+  });
+
   const restoreCheckpoint: CheckpointStore["Service"]["restoreCheckpoint"] = Effect.fn(
     "restoreCheckpoint",
   )(function* (input) {
@@ -164,6 +181,7 @@ export const make = Effect.gen(function* () {
     isGitRepository,
     captureCheckpoint,
     hasCheckpointRef,
+    listCheckpointRefs,
     restoreCheckpoint,
     diffCheckpoints,
     deleteCheckpointRefs,

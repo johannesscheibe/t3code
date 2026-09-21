@@ -7,7 +7,13 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
-import type { ScopedThreadRef, TurnId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  OrchestrationThreadShell,
+  ProjectId,
+  ScopedThreadRef,
+  TurnId,
+} from "@t3tools/contracts";
 import {
   ArrowRightIcon,
   CheckIcon,
@@ -27,7 +33,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCodeViewFileReveal } from "./diffs/useCodeViewFileReveal";
 import { useOpenInPreferredEditor } from "../editorPreferences";
 import { type DraftId } from "../composerDraftStore";
-import { openDiffFilePrimaryAction } from "../diffFileActions";
+import { openDiffFilePrimaryAction, resolveDiffPathForWorkspace } from "../diffFileActions";
+import { useRightPanelStore } from "../rightPanelStore";
 import { useCheckpointDiff } from "~/lib/checkpointDiffState";
 import { cn } from "~/lib/utils";
 import { selectThreadDiffPanelSelection, useDiffPanelStore } from "../diffPanelStore";
@@ -78,6 +85,7 @@ import {
   DropdownMenuTrigger,
 } from "./ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+import { useThreadCheckouts } from "./threadCheckouts";
 import { useEnvironmentQuery } from "../state/query";
 import { useAtomCommand } from "../state/use-atom-command";
 import { serverEnvironment } from "../state/server";
@@ -96,6 +104,69 @@ interface CollapsedDiffFilesState {
 }
 
 const EMPTY_COLLAPSED_DIFF_FILE_KEYS: ReadonlySet<string> = new Set();
+
+/** Picks which checkout the panel reviews: the thread's own workspace or an attached checkout. */
+function DiffCheckoutMenu({
+  environmentId,
+  thread,
+  selectedProjectId,
+  onSelect,
+}: {
+  environmentId: EnvironmentId;
+  thread: Pick<
+    OrchestrationThreadShell,
+    "id" | "projectId" | "branch" | "worktreePath" | "checkouts"
+  >;
+  selectedProjectId: ProjectId | null;
+  onSelect: (projectId: ProjectId | null) => void;
+}) {
+  const threadCheckouts = useThreadCheckouts(environmentId, thread);
+  const { checkouts } = threadCheckouts;
+  if (!threadCheckouts.supported || checkouts.length === 0) return null;
+
+  const selectedCheckout =
+    checkouts.find((checkout) => checkout.projectId === selectedProjectId) ?? null;
+  const selectedTitle = threadCheckouts.projectTitle(
+    selectedCheckout?.projectId ?? thread.projectId,
+  );
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        className="inline-flex h-6 max-w-48 items-center gap-1 rounded-md px-2 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring"
+        aria-label={`Checkout: ${selectedTitle}`}
+      >
+        <span className="truncate">{selectedTitle}</span>
+        <ChevronDownIcon className="size-3.5 shrink-0 opacity-70" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-64">
+        <DropdownMenuItem
+          className={selectedCheckout === null ? "bg-foreground/[0.08]" : undefined}
+          onClick={() => onSelect(null)}
+        >
+          <span className="truncate">{threadCheckouts.projectTitle(thread.projectId)}</span>
+        </DropdownMenuItem>
+        {checkouts.map((checkout) => (
+          <DropdownMenuItem
+            key={checkout.projectId}
+            className={
+              checkout.projectId === selectedCheckout?.projectId
+                ? "bg-foreground/[0.08]"
+                : undefined
+            }
+            onClick={() => onSelect(checkout.projectId)}
+          >
+            <span className="truncate">{threadCheckouts.projectTitle(checkout.projectId)}</span>
+            {checkout.branch ? (
+              <span className="ml-auto truncate text-xs text-muted-foreground">
+                {checkout.branch}
+              </span>
+            ) : null}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
 
 interface DiffPanelProps {
   mode?: DiffPanelMode;
@@ -145,10 +216,25 @@ export default function DiffPanel({
         }
       : null,
   );
-  const activeCwd = activeThread?.worktreePath ?? activeProject?.workspaceRoot;
-  const activeRepositoryRoot = activeThread?.worktreePath
+  // The panel reviews one checkout at a time. A detached checkout falls back to the thread's own.
+  const [selectedCheckoutProjectId, setSelectedCheckoutProjectId] = useState<ProjectId | null>(
+    null,
+  );
+  const selectedCheckout =
+    activeThread?.checkouts.find((checkout) => checkout.projectId === selectedCheckoutProjectId) ??
+    null;
+  const selectedCheckoutProject = useProject(
+    activeThread && selectedCheckout
+      ? { environmentId: activeThread.environmentId, projectId: selectedCheckout.projectId }
+      : null,
+  );
+  // An attached checkout resolves its directory exactly like the thread's own workspace.
+  const activeWorkspace = selectedCheckout ?? activeThread;
+  const activeWorkspaceProject = selectedCheckout ? selectedCheckoutProject : activeProject;
+  const activeCwd = activeWorkspace?.worktreePath ?? activeWorkspaceProject?.workspaceRoot;
+  const activeRepositoryRoot = activeWorkspace?.worktreePath
     ? undefined
-    : activeProject?.repositoryIdentity?.rootPath;
+    : activeWorkspaceProject?.repositoryIdentity?.rootPath;
   const serverConfig = useAtomValue(
     serverEnvironment.configValueAtom(activeThread?.environmentId ?? null),
   );
@@ -223,7 +309,7 @@ export default function DiffPanel({
         : `Turn ${selectedCheckpointTurnCount ?? "?"}`;
   const reviewSectionId = selectedTurn ? `turn:${selectedTurn.turnId}` : selectedGitScope;
   const collapseScopeKey = routeThreadRef
-    ? `${routeThreadRef.environmentId}:${routeThreadRef.threadId}:${reviewSectionId}`
+    ? `${routeThreadRef.environmentId}:${routeThreadRef.threadId}:${selectedCheckout?.projectId ?? ""}:${reviewSectionId}`
     : null;
   const codeViewMountKey = `${collapseScopeKey ?? reviewSectionId}:${codeViewRevision}`;
   const reviewSectionTitle = selectedTurn
@@ -248,7 +334,10 @@ export default function DiffPanel({
       fromTurnCount: selectedCheckpointRange?.fromTurnCount ?? null,
       toTurnCount: selectedCheckpointRange?.toTurnCount ?? null,
       ignoreWhitespace: diffIgnoreWhitespace,
-      cacheScope: selectedTurn ? `turn:${selectedTurn.turnId}` : null,
+      checkoutProjectId: selectedCheckout?.projectId ?? null,
+      cacheScope: selectedTurn
+        ? `turn:${selectedTurn.turnId}:${selectedCheckout?.projectId ?? ""}`
+        : null,
     },
     { enabled: isGitRepo && selectedTurn !== undefined },
   );
@@ -483,6 +572,21 @@ export default function DiffPanel({
 
   const openDiffFile = useCallback(
     (filePath: string) => {
+      // The file panel opens an attached checkout's file by absolute path, which
+      // ChatView maps back to that checkout. It works in every client, unlike an editor.
+      if (selectedCheckout !== null && routeThreadRef && activeCwd) {
+        const workspaceFilePath = resolveDiffPathForWorkspace({
+          filePath,
+          workspaceRoot: activeCwd,
+          repositoryRoot: activeRepositoryRoot,
+        });
+        if (workspaceFilePath) {
+          useRightPanelStore
+            .getState()
+            .openFile(routeThreadRef, `${activeCwd}/${workspaceFilePath}`);
+        }
+        return;
+      }
       openDiffFilePrimaryAction({
         threadRef: routeThreadRef,
         filePath,
@@ -507,7 +611,7 @@ export default function DiffPanel({
         },
       });
     },
-    [activeCwd, activeRepositoryRoot, openInPreferredEditor, routeThreadRef],
+    [activeCwd, activeRepositoryRoot, openInPreferredEditor, routeThreadRef, selectedCheckout],
   );
   const toggleDiffFileCollapsed = useCallback(
     (fileKey: string) => {
@@ -555,6 +659,14 @@ export default function DiffPanel({
   const headerRow = (
     <>
       <div className="flex min-w-0 flex-1 items-center gap-3 [-webkit-app-region:no-drag]">
+        {activeThread ? (
+          <DiffCheckoutMenu
+            environmentId={activeThread.environmentId}
+            thread={activeThread}
+            selectedProjectId={selectedCheckout?.projectId ?? null}
+            onSelect={setSelectedCheckoutProjectId}
+          />
+        ) : null}
         <DropdownMenu>
           <DropdownMenuTrigger
             className="inline-flex h-6 max-w-full items-center gap-1 rounded-md bg-accent px-2 text-xs font-medium text-accent-foreground outline-none transition-colors hover:bg-accent/80 focus-visible:ring-2 focus-visible:ring-ring"
@@ -986,6 +1098,9 @@ export default function DiffPanel({
                     sectionId={reviewSectionId}
                     sectionTitle={reviewSectionTitle}
                     composerDraftTarget={composerDraftTarget}
+                    {...(selectedCheckout !== null && activeCwd
+                      ? { commentPathRoot: activeCwd }
+                      : {})}
                     renderHeaderFilenameSuffix={(fileDiff) => (
                       <DiffFilePathCopyButton filePath={resolveFileDiffPath(fileDiff)} />
                     )}

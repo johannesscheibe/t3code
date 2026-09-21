@@ -44,6 +44,8 @@ import {
   ThreadPullRequestLinkedPayload,
   ThreadPullRequestSyncedPayload,
   ThreadPullRequestUnlinkedPayload,
+  ThreadCheckoutAttachedPayload,
+  ThreadCheckoutDetachedPayload,
   ThreadSnoozedPayload,
   ThreadUnpinnedPayload,
   ThreadUnarchivedPayload,
@@ -674,6 +676,57 @@ export function projectEvent(
                 removePullRequestLink(thread.pullRequests, payload),
                 nextBase.projects,
               ),
+              updatedAt: payload.updatedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.checkout-attached":
+      return decodeForEvent(
+        ThreadCheckoutAttachedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          const { checkout } = payload;
+          const known = thread.checkouts.some((entry) => entry.projectId === checkout.projectId);
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              // A sync replaces its checkout in place so attached checkouts keep their order.
+              checkouts: known
+                ? thread.checkouts.map((entry) =>
+                    entry.projectId === checkout.projectId ? checkout : entry,
+                  )
+                : [...thread.checkouts, checkout],
+              updatedAt: payload.updatedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.checkout-detached":
+      return decodeForEvent(
+        ThreadCheckoutDetachedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              checkouts: thread.checkouts.filter((entry) => entry.projectId !== payload.projectId),
               updatedAt: payload.updatedAt,
             }),
           };

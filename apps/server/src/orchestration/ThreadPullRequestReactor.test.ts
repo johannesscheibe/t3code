@@ -90,6 +90,7 @@ function thread(
     runtimeMode: "full-access",
     interactionMode: "default",
     pullRequests: [],
+    checkouts: [],
     branch: "feature",
     worktreePath: null,
     latestTurn: null,
@@ -133,18 +134,22 @@ const makeHarness = Effect.fn("makeThreadPullRequestHarness")(function* (options
   readonly summary?: PullRequestService["Service"]["summary"];
   readonly existingWorktrees?: ReadonlyArray<string>;
   readonly project?: OrchestrationProjectShell;
+  readonly extraProjects?: ReadonlyArray<OrchestrationProjectShell>;
   readonly resolveRepositoryIdentity?: RepositoryIdentityResolver["Service"]["resolve"];
 }) {
   const activation = yield* Deferred.make<void>();
   const snapshots = yield* Ref.make<OrchestrationShellSnapshot>({
     snapshotSequence: 1,
-    projects: [options.project ?? project],
+    projects: [options.project ?? project, ...(options.extraProjects ?? [])],
     threads: options.threads,
     updatedAt: NOW,
   });
   const reads = yield* Queue.unbounded<void>();
   const events = yield* PubSub.unbounded<OrchestrationEvent>();
   const commands = yield* Ref.make<ReadonlyArray<SyncCommand>>([]);
+  const checkoutSyncs = yield* Ref.make<
+    ReadonlyArray<Extract<OrchestrationCommand, { type: "thread.checkout.sync" }>>
+  >([]);
   const branchCalls = yield* Ref.make<
     ReadonlyArray<{ readonly cwd: string; readonly branch: string; readonly refresh: boolean }>
   >([]);
@@ -182,6 +187,11 @@ const makeHarness = Effect.fn("makeThreadPullRequestHarness")(function* (options
         Effect.map((subscription) => Stream.fromSubscription(subscription)),
       ),
       dispatch: (command) => {
+        if (command.type === "thread.checkout.sync") {
+          return Ref.update(checkoutSyncs, (current) => [...current, command]).pipe(
+            Effect.as({ sequence: 1 }),
+          );
+        }
         if (command.type !== "thread.pull-request.sync") {
           return Effect.die(`Unexpected command: ${command.type}`);
         }
@@ -234,6 +244,7 @@ const makeHarness = Effect.fn("makeThreadPullRequestHarness")(function* (options
     reads,
     snapshots,
     commands,
+    checkoutSyncs,
     branchCalls,
     summaryCalls,
     publish: (event: OrchestrationEvent) => PubSub.publish(events, event),
@@ -639,5 +650,101 @@ describe("ThreadPullRequestReactor", () => {
           }).pipe(Effect.provide(fixture.layer));
         }),
       ),
+  );
+  it.effect("detects the pull requests of attached checkouts in their own directories", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const attachedProject = (name: string) => {
+          const key = `github.com/owner/${name}`;
+          return {
+            ...project,
+            id: ProjectId.make(name),
+            title: name,
+            workspaceRoot: `/workspace/${name}`,
+            repositoryIdentity: {
+              ...project.repositoryIdentity,
+              canonicalKey: key,
+              displayName: `owner/${name}`,
+              rootPath: `/workspace/${name}`,
+            },
+          } satisfies OrchestrationProjectShell;
+        };
+        const library = attachedProject("library");
+        const docs = attachedProject("docs");
+        const checkout = { pullRequest: null, source: "agent" as const, attachedAt: NOW };
+        const pullRequestsByCwd = new Map([
+          ["/worktrees/library", { project: library, number: 7 }],
+          // A local checkout is looked up in its project's own root.
+          ["/workspace/docs", { project: docs, number: 8 }],
+        ]);
+        const fixture = yield* makeHarness({
+          threads: [
+            thread("attached", {
+              branch: null,
+              checkouts: [
+                {
+                  ...checkout,
+                  projectId: library.id,
+                  worktreePath: "/worktrees/library",
+                  branch: "feature",
+                  checkpointId: "library-attachment",
+                },
+                {
+                  ...checkout,
+                  projectId: docs.id,
+                  worktreePath: null,
+                  branch: "docs-feature",
+                  checkpointId: "docs-attachment",
+                },
+              ],
+            }),
+          ],
+          extraProjects: [library, docs],
+          existingWorktrees: [...pullRequestsByCwd.keys()],
+          branchPullRequest: (input) => {
+            const match = pullRequestsByCwd.get(input.cwd);
+            return Effect.succeed(
+              match === undefined
+                ? null
+                : {
+                    ...branchPullRequest(match.number),
+                    url: `https://github.com/owner/${match.project.title}/pull/${match.number}`,
+                    repositoryKey: match.project.repositoryIdentity.canonicalKey,
+                  },
+            );
+          },
+        });
+        yield* Effect.gen(function* () {
+          yield* fixture.start();
+          expect(yield* Ref.get(fixture.branchCalls)).toEqual([
+            { cwd: "/worktrees/library", branch: "feature", refresh: false },
+            { cwd: "/workspace/docs", branch: "docs-feature", refresh: false },
+          ]);
+          expect(yield* Ref.get(fixture.checkoutSyncs)).toMatchObject([
+            {
+              threadId: "attached",
+              projectId: library.id,
+              branch: "feature",
+              pullRequest: {
+                number: 7,
+                url: "https://github.com/owner/library/pull/7",
+                state: "open",
+              },
+            },
+            {
+              threadId: "attached",
+              projectId: docs.id,
+              branch: "docs-feature",
+              pullRequest: {
+                number: 8,
+                url: "https://github.com/owner/docs/pull/8",
+                state: "open",
+              },
+            },
+          ]);
+          expect(yield* Ref.get(fixture.commands)).toEqual([]);
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
   );
 });

@@ -1,5 +1,5 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { type EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { type EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import {
@@ -437,6 +437,44 @@ describe("rightPanelStore", () => {
       activeSurfaceId: "files",
       surfaces: [{ id: "files", kind: "files" }],
     });
+  });
+
+  it("remembers which checkout the files surface browses", () => {
+    const store = useRightPanelStore.getState();
+    store.openFilesCheckout(refA, ProjectId.make("project-api"));
+    store.open(refA, "agents");
+    store.open(refA, "files");
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "files",
+      surfaces: [
+        { id: "files", kind: "files", checkoutProjectId: "project-api" },
+        { id: "agents", kind: "agents" },
+      ],
+    });
+
+    store.openFilesCheckout(refA, null);
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces,
+    ).toEqual([
+      { id: "files", kind: "files" },
+      { id: "agents", kind: "agents" },
+    ]);
+  });
+
+  it("drops a malformed files checkout during migration", () => {
+    const migrated = migratePersistedRightPanelState({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: "files",
+          surfaces: [{ id: "files", kind: "files", checkoutProjectId: 42 }],
+        },
+      },
+    });
+    expect(migrated.byThreadKey["env-1:thread-A"]?.surfaces).toEqual([
+      { id: "files", kind: "files" },
+    ]);
   });
 
   it("replaces the standalone explorer with peer file surfaces", () => {

@@ -796,7 +796,10 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
                 ...(mcp?.agentDeviceEnvironment
                   ? { agentDeviceEnvironment: mcp.agentDeviceEnvironment }
                   : {}),
-                additionalDirectories: [serverConfig.attachmentsDir],
+                additionalDirectories: [
+                  ...(input.additionalDirectories ?? []),
+                  serverConfig.attachmentsDir,
+                ],
                 ...(Option.isSome(cursor) ? { resumeSessionId: cursor.value.sessionId } : {}),
                 mcpServers: mcp
                   ? [
@@ -818,7 +821,11 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
               // capability. The agent gates each write behind
               // `session/request_permission`, so only path containment is
               // checked here.
-              const allowedRoots = [cwd, serverConfig.attachmentsDir];
+              const allowedRoots = [
+                cwd,
+                ...(input.additionalDirectories ?? []),
+                serverConfig.attachmentsDir,
+              ];
               yield* runtime.handleReadTextFile((request) =>
                 readClientTextFile({ fileSystem, path, allowedRoots, request }),
               );

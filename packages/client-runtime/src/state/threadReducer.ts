@@ -135,6 +135,7 @@ export function applyThreadDetailEvent(
           snoozedAt: null,
           deletedAt: null,
           pullRequests: [],
+          checkouts: [],
           messages: [],
           proposedPlans: [],
           activities: [],
@@ -295,6 +296,34 @@ export function applyThreadDetailEvent(
         ),
         event.payload.updatedAt,
       );
+
+    case "thread.checkout-attached": {
+      const checkout = event.payload.checkout;
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          checkouts: thread.checkouts.some((existing) => existing.projectId === checkout.projectId)
+            ? thread.checkouts.map((existing) =>
+                existing.projectId === checkout.projectId ? checkout : existing,
+              )
+            : [...thread.checkouts, checkout],
+          updatedAt: event.payload.updatedAt,
+        },
+      };
+    }
+
+    case "thread.checkout-detached":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          checkouts: thread.checkouts.filter(
+            (existing) => existing.projectId !== event.payload.projectId,
+          ),
+          updatedAt: event.payload.updatedAt,
+        },
+      };
 
     case "thread.pull-request-synced": {
       if (

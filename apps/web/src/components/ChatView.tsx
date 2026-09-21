@@ -211,6 +211,7 @@ import { RightPanelTabs } from "./RightPanelTabs";
 import { AgentsPanel } from "./AgentsPanel";
 import { LinkPullRequestDialogHost } from "./pullRequest/LinkPullRequestDialog";
 import { ThreadPullRequestsPanel } from "./pullRequest/ThreadPullRequestsPanel";
+import { FileCheckoutSwitcher } from "./files/FileCheckoutSwitcher";
 import { useDeviceState } from "~/state/device";
 import { DeviceSetup } from "./device/DeviceSetup";
 import { Dialog } from "./ui/dialog";
@@ -3518,6 +3519,38 @@ export default function ChatView(props: ChatViewProps) {
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
+  // The attached checkout the rendered Files surface shows. The tree browses the checkout its
+  // surface remembers. Files from an attached checkout open by absolute path, so a file
+  // surface belongs to the checkout whose directory contains it, while relative paths from
+  // every other opener stay on the thread's workspace. A detached checkout finds nothing
+  // and falls back to the thread's workspace.
+  const renderedFilesCheckout =
+    renderedRightPanelSurface?.kind === "file" || renderedRightPanelSurface?.kind === "files"
+      ? ((activeThread?.checkouts ?? []).flatMap((checkout) => {
+          const project = allProjects.find(
+            (project) =>
+              project.environmentId === activeThread?.environmentId &&
+              project.id === checkout.projectId,
+          );
+          const directory = checkout.worktreePath ?? project?.workspaceRoot;
+          if (directory === undefined) return [];
+          const shown =
+            renderedRightPanelSurface.kind === "file"
+              ? renderedRightPanelSurface.relativePath.startsWith(`${directory}/`)
+              : checkout.projectId === renderedRightPanelSurface.checkoutProjectId;
+          return shown
+            ? [
+                {
+                  projectId: checkout.projectId,
+                  projectName: project?.title ?? directory,
+                  directory,
+                },
+              ]
+            : [];
+        })[0] ?? null)
+      : null;
+  const renderedFilesCheckoutDirectory = renderedFilesCheckout?.directory ?? null;
+  const filesSurfaceCwd = renderedFilesCheckoutDirectory ?? activeWorkspaceRoot;
   useLayoutEffect(() => {
     if (
       threadDetailLoading ||
@@ -4454,9 +4487,26 @@ export default function ChatView(props: ChatViewProps) {
   const openFileSurface = useCallback(
     (relativePath: string) => {
       if (!activeThreadRef || !activeProject) return;
-      useRightPanelStore.getState().openFile(activeThreadRef, relativePath);
+      // The tree emits paths relative to the checkout it shows. An attached
+      // checkout is not the thread's cwd, so its files open by absolute path.
+      const path = renderedFilesCheckoutDirectory
+        ? `${renderedFilesCheckoutDirectory}/${relativePath}`
+        : relativePath;
+      useRightPanelStore.getState().openFile(activeThreadRef, path);
     },
-    [activeProject, activeThreadRef],
+    [activeProject, activeThreadRef, renderedFilesCheckoutDirectory],
+  );
+  // File surfaces are keyed by the path they were opened with, which is absolute
+  // for an attached checkout while the preview works with a checkout-relative one.
+  const handleCheckoutFilePendingChange = useCallback(
+    (relativePath: string, pending: boolean) =>
+      handleFilePendingChange(
+        renderedFilesCheckoutDirectory
+          ? `${renderedFilesCheckoutDirectory}/${relativePath}`
+          : relativePath,
+        pending,
+      ),
+    [handleFilePendingChange, renderedFilesCheckoutDirectory],
   );
   // The shell carries server PR updates even while thread detail is still loading.
   const activeThreadMetadata = activeThreadShell ?? activeThread;
@@ -8780,19 +8830,23 @@ export default function ChatView(props: ChatViewProps) {
           key={`${activeThread.environmentId}:${
             renderedRightPanelSurface.kind === "file" && renderedRightPanelSurface.attachment
               ? `attachment:${renderedRightPanelSurface.attachment.id}`
-              : activeWorkspaceRoot
+              : filesSurfaceCwd
           }`}
           environmentId={activeThread.environmentId}
-          cwd={activeWorkspaceRoot ?? ""}
-          projectName={activeProject?.title ?? ""}
+          cwd={filesSurfaceCwd ?? ""}
+          projectName={renderedFilesCheckout?.projectName ?? activeProject?.title ?? ""}
           threadRef={activeThreadRef}
           composerDraftTarget={composerDraftTarget}
           keybindings={keybindings}
           availableEditors={availableEditors}
           relativePath={
-            renderedRightPanelSurface.kind === "file"
-              ? renderedRightPanelSurface.relativePath
-              : null
+            renderedRightPanelSurface.kind !== "file"
+              ? null
+              : renderedFilesCheckoutDirectory
+                ? renderedRightPanelSurface.relativePath.slice(
+                    renderedFilesCheckoutDirectory.length + 1,
+                  )
+                : renderedRightPanelSurface.relativePath
           }
           {...(renderedRightPanelSurface.kind === "file" && renderedRightPanelSurface.attachment
             ? { attachment: renderedRightPanelSurface.attachment }
@@ -8808,12 +8862,29 @@ export default function ChatView(props: ChatViewProps) {
               : 0
           }
           onOpenFile={openFileSurface}
-          onPendingChange={handleFilePendingChange}
+          onPendingChange={handleCheckoutFilePendingChange}
+          {...(renderedFilesCheckoutDirectory
+            ? { mentionRoot: renderedFilesCheckoutDirectory }
+            : {})}
           selectedFilePending={
             renderedRightPanelSurface.kind === "file" &&
             pendingFileSurfaceIds.has(renderedRightPanelSurface.id)
           }
           workspaceMutationId={workspaceMutationId}
+          {...(isServerThread && activeThread && activeProject
+            ? {
+                headerSlot: (
+                  <FileCheckoutSwitcher
+                    environmentId={activeThread.environmentId}
+                    thread={activeThread}
+                    selectedProjectId={renderedFilesCheckout?.projectId ?? null}
+                    onSelect={(projectId) =>
+                      useRightPanelStore.getState().openFilesCheckout(activeThreadRef, projectId)
+                    }
+                  />
+                ),
+              }
+            : {})}
         />
       </Suspense>
     ) : null

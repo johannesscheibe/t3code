@@ -174,6 +174,8 @@ export interface CodexSessionRuntimeOptions {
   readonly launchArgs?: string;
   readonly environment?: NodeJS.ProcessEnv;
   readonly cwd: string;
+  /** Attached worktrees granted as extra writable roots on each turn. */
+  readonly additionalDirectories?: ReadonlyArray<string>;
   readonly runtimeMode: RuntimeMode;
   readonly model?: string;
   readonly serviceTier?: CodexServiceTier | undefined;
@@ -561,6 +563,7 @@ function buildThreadStartParams(input: {
 
 function runtimeModeToTurnSandboxPolicy(
   input: RuntimeMode,
+  writableRoots: ReadonlyArray<string> | undefined,
 ): EffectCodexSchema.V2TurnStartParams__SandboxPolicy {
   switch (input) {
     case "approval-required":
@@ -569,8 +572,10 @@ function runtimeModeToTurnSandboxPolicy(
       };
     case "auto-accept-edits":
     case "auto":
+      // Thread start only takes a cwd; attached worktrees widen the sandbox per turn.
       return {
         type: "workspaceWrite",
+        ...(writableRoots !== undefined && writableRoots.length > 0 ? { writableRoots } : {}),
       };
     case "full-access":
     default:
@@ -617,6 +622,7 @@ export function buildTurnStartParams(input: {
   readonly serviceTier?: CodexServiceTier;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort;
   readonly interactionMode?: ProviderInteractionMode;
+  readonly writableRoots?: ReadonlyArray<string>;
   /** Defaults to true so callers that predate the agent-access gate are unchanged. */
   readonly browserToolsAvailable?: boolean | T3CodeToolAvailability;
 }): Effect.Effect<
@@ -647,7 +653,7 @@ export function buildTurnStartParams(input: {
     input: turnInput,
     approvalPolicy: config.approvalPolicy,
     approvalsReviewer: config.approvalsReviewer,
-    sandboxPolicy: runtimeModeToTurnSandboxPolicy(input.runtimeMode),
+    sandboxPolicy: runtimeModeToTurnSandboxPolicy(input.runtimeMode, input.writableRoots),
     ...(input.model ? { model: input.model } : {}),
     ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
@@ -2455,6 +2461,9 @@ export const makeCodexSessionRuntime = (
             ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
             ...(input.effort ? { effort: input.effort } : {}),
             ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
+            ...(options.additionalDirectories
+              ? { writableRoots: options.additionalDirectories }
+              : {}),
             // Derived from the session's own credential rather than the
             // setting, so the prompt describes the tools this turn actually
             // has even if the setting changed after the session started.

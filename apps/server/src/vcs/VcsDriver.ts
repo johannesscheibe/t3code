@@ -39,11 +39,19 @@ export interface VcsDeleteCheckpointRefsInput {
   readonly checkpointRefs: ReadonlyArray<CheckpointRef>;
 }
 
+export interface VcsListCheckpointRefsInput {
+  readonly cwd: string;
+  readonly prefix: string;
+}
+
 export interface VcsCheckpointOps {
   readonly captureCheckpoint: (input: VcsCaptureCheckpointInput) => Effect.Effect<void, VcsError>;
   readonly hasCheckpointRef: (
     input: Omit<VcsRestoreCheckpointInput, "fallbackToHead">,
   ) => Effect.Effect<boolean, VcsError>;
+  readonly listCheckpointRefs: (
+    input: VcsListCheckpointRefsInput,
+  ) => Effect.Effect<ReadonlyArray<CheckpointRef>, VcsError>;
   readonly restoreCheckpoint: (
     input: VcsRestoreCheckpointInput,
   ) => Effect.Effect<boolean, VcsError>;
