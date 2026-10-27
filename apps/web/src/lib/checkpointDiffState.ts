@@ -1,12 +1,12 @@
-import {
-  type CheckpointDiffState,
-  type CheckpointDiffTarget,
-} from "@t3tools/client-runtime/state/threads";
+import { type CheckpointDiffState } from "@t3tools/client-runtime/state/threads";
 
-import { useCheckpointDiff as useCheckpointDiffQuery } from "../state/queries";
+import {
+  type ThreadCheckpointDiffTarget,
+  useCheckpointDiff as useCheckpointDiffQuery,
+} from "../state/queries";
 
 export function useCheckpointDiff(
-  target: CheckpointDiffTarget,
+  target: ThreadCheckpointDiffTarget,
   options?: { readonly enabled?: boolean },
 ): CheckpointDiffState {
   const state = useCheckpointDiffQuery(target, options);

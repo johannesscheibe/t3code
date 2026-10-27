@@ -17,7 +17,10 @@ import * as Schema from "effect/Schema";
 import {
   isCheckpointRestoreIsolated,
   SHARED_WORKSPACE_RESTORE_MESSAGE,
+  ATTACHED_CHECKOUT_RESTORE_MESSAGE,
+  areAttachedCheckoutsRestorable,
 } from "./CheckpointRestoreSafety.ts";
+import { resolveAttachedCheckoutRoots } from "./AttachedCheckouts.ts";
 import { CheckpointServiceV2 } from "./CheckpointService.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
@@ -40,6 +43,7 @@ export class CheckpointRollbackExecutionError extends Schema.TaggedError<Checkpo
       "provider-turn-unavailable",
       "unexpected-failure",
       "shared-workspace",
+      "attached-checkout",
     ]),
     threadId: ThreadId,
     providerThreadId: ProviderThreadId,
@@ -57,6 +61,8 @@ export class CheckpointRollbackExecutionError extends Schema.TaggedError<Checkpo
         return `Provider turn for rollback target ${this.checkpointId} is unavailable on provider thread ${this.providerThreadId}.`;
       case "shared-workspace":
         return SHARED_WORKSPACE_RESTORE_MESSAGE;
+      case "attached-checkout":
+        return ATTACHED_CHECKOUT_RESTORE_MESSAGE;
       case "unexpected-failure":
         return ROLLBACK_FAILED_MESSAGE;
     }
@@ -174,6 +180,35 @@ export const layer: Layer.Layer<
           checkpointId: input.checkpointId,
         });
       }
+      // Every attached checkout must be restorable before the provider
+      // conversation or any file changes.
+      const checkoutRoots =
+        input.restoreFiles === false
+          ? []
+          : yield* resolveAttachedCheckoutRoots(projection.thread, projects);
+      const checkoutTargets =
+        checkoutRoots.length === 0
+          ? []
+          : yield* checkpoints.checkoutRestoreTargets({
+              threadId: input.threadId,
+              checkouts: checkoutRoots,
+              ordinalWithinScope: checkpoint.ordinalWithinScope,
+            });
+      if (
+        !(yield* areAttachedCheckoutsRestorable(projection.thread, checkoutTargets, {
+          fileSystem,
+          projections,
+          projects,
+          path,
+        }))
+      ) {
+        return yield* new CheckpointRollbackExecutionError({
+          reason: "attached-checkout",
+          threadId: input.threadId,
+          providerThreadId: input.providerThreadId,
+          checkpointId: input.checkpointId,
+        });
+      }
 
       const modelSelection = projection.thread.modelSelection;
       const resolvedRuntimePolicy = yield* runtimePolicy.resolve({
@@ -265,7 +300,9 @@ export const layer: Layer.Layer<
               target: rollbackTarget,
               providerThreadTurns,
             });
-      if (input.restoreFiles !== false) yield* checkpoints.restore({ scope, checkpoint });
+      if (input.restoreFiles !== false) {
+        yield* checkpoints.restore({ scope, checkpoint, checkouts: checkoutTargets });
+      }
       const staleCheckpoints = projection.checkpoints.filter(
         (candidate) =>
           candidate.scopeId === scope.id &&

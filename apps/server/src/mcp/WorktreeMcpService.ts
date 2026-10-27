@@ -1,7 +1,11 @@
 import {
   CommandId,
   MessageId,
-  type ProjectId,
+  ProjectId,
+  type ThreadAttachedCheckout,
+  type WorktreeMcpAttachCheckoutInput,
+  type WorktreeMcpCheckoutChangeResult,
+  type WorktreeMcpDetachCheckoutInput,
   WorktreeMcpFailure,
   type WorktreeMcpContinuationStatus,
   type WorktreeMcpHandoffInput,
@@ -18,6 +22,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
+import * as ThreadCheckoutService from "../orchestration-v2/ThreadCheckoutService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
@@ -35,6 +40,14 @@ export class WorktreeMcpService extends Context.Service<
     readonly status: (
       scope: McpInvocationScope,
     ) => Effect.Effect<WorktreeMcpStatusResult, WorktreeMcpFailure>;
+    readonly attachCheckout: (
+      scope: McpInvocationScope,
+      input: WorktreeMcpAttachCheckoutInput,
+    ) => Effect.Effect<WorktreeMcpCheckoutChangeResult, WorktreeMcpFailure>;
+    readonly detachCheckout: (
+      scope: McpInvocationScope,
+      input: WorktreeMcpDetachCheckoutInput,
+    ) => Effect.Effect<WorktreeMcpCheckoutChangeResult, WorktreeMcpFailure>;
   }
 >()("t3/mcp/WorktreeMcpService") {}
 
@@ -64,6 +77,7 @@ const make = Effect.gen(function* () {
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
   const setupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+  const threadCheckouts = yield* ThreadCheckoutService.ThreadCheckoutService;
 
   // Serializes handoffs per thread: two concurrent calls could otherwise both
   // pass the worktreePath === null check and each create a worktree, leaving
@@ -487,12 +501,121 @@ const make = Effect.gen(function* () {
         branch: projection.thread.branch,
         projectWorkspaceRoot: project.workspaceRoot,
         defaultStartFromOrigin,
+        attachedCheckouts: yield* Effect.forEach(projection.thread.attachedCheckouts ?? [], (c) =>
+          describeCheckout(c),
+        ),
       };
       return result;
     },
   );
 
-  return WorktreeMcpService.of({ handoff, status });
+  // A project deleted since it was attached still names the directory it had.
+  const describeCheckout = (checkout: ThreadAttachedCheckout) =>
+    (checkout.worktreePath !== null
+      ? Effect.succeed(checkout.worktreePath)
+      : projects.getById(checkout.projectId, { includeDeleted: true }).pipe(
+          asOperationFailed(`Unable to read project ${checkout.projectId}`),
+          Effect.map(
+            Option.match({
+              onNone: () => `(project ${checkout.projectId} no longer exists)`,
+              onSome: (project) => project.workspaceRoot,
+            }),
+          ),
+        )
+    ).pipe(
+      Effect.map((path) => ({ projectId: checkout.projectId, path, branch: checkout.branch })),
+    );
+
+  // Agents name projects the way they see them: by id, title, or root path.
+  const resolveProject = Effect.fn("WorktreeMcpService.resolveProject")(function* (
+    reference: string,
+  ) {
+    const byId = yield* projects
+      .getById(ProjectId.make(reference))
+      .pipe(asOperationFailed("Unable to read projects"));
+    if (Option.isSome(byId)) return byId.value;
+    // Only a path can name a root, and one that no longer exists matches no project.
+    const byRoot = path.isAbsolute(reference)
+      ? yield* projects.getByWorkspaceRoot(reference).pipe(
+          Effect.catchIf(
+            (error) => error.operation === "normalize-workspace",
+            () => Effect.succeed(Option.none()),
+          ),
+          asOperationFailed("Unable to read projects"),
+        )
+      : Option.none();
+    if (Option.isSome(byRoot)) return byRoot.value;
+    const { projects: all } = yield* projects.snapshot.pipe(
+      asOperationFailed("Unable to read projects"),
+    );
+    const byTitle = all.filter(
+      (project) => project.title.toLowerCase() === reference.toLowerCase(),
+    );
+    if (byTitle.length === 1) return byTitle[0]!;
+    return yield* failure(
+      "project_not_found",
+      byTitle.length === 0
+        ? `No project matches '${reference}'.`
+        : `Several projects are titled '${reference}'; pass the project id or workspace root.`,
+    );
+  });
+
+  const attachCheckout: WorktreeMcpService["Service"]["attachCheckout"] = Effect.fn(
+    "WorktreeMcpService.attachCheckout",
+  )(function* (callerScope, input) {
+    yield* requireCapability(callerScope);
+    const scope = yield* requireThreadScope(callerScope);
+    const project = yield* resolveProject(input.project);
+    const ids = yield* handoffIds(scope);
+    const checkout = yield* threadCheckouts
+      .attach({
+        commandId: CommandId.make(ids.commandId.replace("worktree-handoff", "checkout-attach")),
+        threadId: scope.thread.threadId,
+        projectId: project.id,
+        workspace: input.workspace ?? { type: "root" },
+        ...(input.runSetupScript === undefined ? {} : { runSetupScript: input.runSetupScript }),
+      })
+      .pipe(Effect.mapError((error) => failure("invalid_request", error.message)));
+    return {
+      checkout: yield* describeCheckout(checkout),
+      note: "Attached. Turn diffs cover it from now on. Your sandbox and permissions include it from your next turn; until then, access there may be limited.",
+    };
+  });
+
+  const detachCheckout: WorktreeMcpService["Service"]["detachCheckout"] = Effect.fn(
+    "WorktreeMcpService.detachCheckout",
+  )(function* (callerScope, input) {
+    yield* requireCapability(callerScope);
+    const scope = yield* requireThreadScope(callerScope);
+    const projection = yield* loadThread(scope);
+    const attached = projection.thread.attachedCheckouts ?? [];
+    // An attached project may have been deleted since, so try the stored id first.
+    const projectId =
+      attached.find((candidate) => candidate.projectId === input.project)?.projectId ??
+      (yield* resolveProject(input.project)).id;
+    const checkout = attached.find((candidate) => candidate.projectId === projectId);
+    if (checkout === undefined) {
+      return yield* failure(
+        "invalid_request",
+        `'${input.project}' is not attached to this thread.`,
+      );
+    }
+    const ids = yield* handoffIds(scope);
+    yield* threadManagement
+      .dispatch({
+        type: "thread.checkout.detach",
+        commandId: CommandId.make(ids.commandId.replace("worktree-handoff", "checkout-detach")),
+        threadId: scope.thread.threadId,
+        projectId,
+      })
+      .pipe(asOperationFailed("Unable to detach the checkout"));
+    return {
+      checkout: yield* describeCheckout(checkout),
+      note: "Detached. Turn diffs no longer cover it, including this turn's edits there. Your sandbox drops it from your next turn.",
+    };
+  });
+
+  return WorktreeMcpService.of({ handoff, status, attachCheckout, detachCheckout });
 });
 
 export const layer: Layer.Layer<
@@ -506,4 +629,5 @@ export const layer: Layer.Layer<
   | GitWorkflowService.GitWorkflowService
   | ProjectSetupScriptRunner.ProjectSetupScriptRunner
   | VcsStatusBroadcaster.VcsStatusBroadcaster
+  | ThreadCheckoutService.ThreadCheckoutService
 > = Layer.effect(WorktreeMcpService, make);

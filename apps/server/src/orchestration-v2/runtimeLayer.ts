@@ -46,6 +46,7 @@ import * as RuntimePolicy from "./RuntimePolicy.ts";
 import * as RuntimeRequestService from "./RuntimeRequestService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ThreadLaunchService from "./ThreadLaunchService.ts";
+import * as ThreadCheckoutService from "./ThreadCheckoutService.ts";
 import * as ThreadLifecycleService from "./ThreadLifecycleService.ts";
 import * as ThreadForkService from "./ThreadForkService.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
@@ -148,6 +149,7 @@ const layerRunExecutionServiceProvided = RunExecutionService.layer.pipe(
       layerEventSinkProvided,
       IdAllocator.layer,
       layerProviderEventIngestorProvided,
+      ProjectStore.layer,
     ),
   ),
 );
@@ -194,6 +196,7 @@ const layerCheckpointCaptureServiceProvided = CheckpointCaptureService.layer.pip
       layerEventSinkProvided,
       IdAllocator.layer,
       ProjectionStore.layer,
+      ProjectStore.layer,
     ),
   ),
 );
@@ -264,6 +267,17 @@ const layerThreadLaunchProvided = ThreadLaunchService.layer.pipe(
       layerThreadManagementProvided,
       layerCommandReceiptStoreProvided,
       IdAllocator.layer,
+    ),
+  ),
+);
+const layerThreadCheckoutProvided = ThreadCheckoutService.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      layerProjectService,
+      layerProjectSetupScriptRunner,
+      layerThreadManagementProvided,
+      layerCheckpointServiceProvided,
+      ProjectStore.layer,
     ),
   ),
 );
@@ -353,6 +367,7 @@ export const layerProduction = Layer.mergeAll(
   layerProjectService,
   layerManagedProjectFoldersProvided,
   layerThreadLaunchProvided,
+  layerThreadCheckoutProvided,
   layerThreadLifecycleProvided,
   layerScheduledTaskProvided,
   layerSecretRequestsProvided,

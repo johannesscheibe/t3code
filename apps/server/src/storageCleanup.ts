@@ -427,6 +427,14 @@ const make = Effect.gen(function* () {
       snapshot.threads.filter((thread) => thread.worktreePath !== null),
       (thread) => path.resolve(thread.worktreePath!),
     );
+    // Another thread may work in this worktree as an attached checkout.
+    const isAttached = (threads: typeof snapshot.threads, worktreePath: string) =>
+      threads.some((thread) =>
+        (thread.attachedCheckouts ?? []).some(
+          (checkout) =>
+            checkout.worktreePath !== null && path.resolve(checkout.worktreePath) === worktreePath,
+        ),
+      );
     const candidates = [
       ...[...groups.values()].map((group) => group[0]!),
       ...deletedThreads.filter((thread) => !groups.has(path.resolve(thread.worktreePath!))),
@@ -455,6 +463,7 @@ const make = Effect.gen(function* () {
         if (deleted && !settings.worktreeOnDelete) return keep("no rules apply");
         const shared = groups.get(worktreePath)?.length ?? 0;
         if (shared > 1) return keep(`shared by ${shared} threads`);
+        if (isAttached(snapshot.threads, worktreePath)) return keep("attached to another thread");
         if (project === undefined) return keep("project is unavailable");
         if (!deleted && !storageCleanupThreadIdle(thread, now))
           return keep("thread is running or has pending work");
@@ -548,6 +557,7 @@ const make = Effect.gen(function* () {
               entry.worktreePath !== null && path.resolve(entry.worktreePath) === worktreePath,
           );
           if (hasTerminal(worktreePath)) return "open terminal";
+          if (isAttached(latestSnapshot.threads, worktreePath)) return "attached to another thread";
           if (deleted) {
             if (
               latest.length > 0 ||

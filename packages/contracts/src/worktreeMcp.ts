@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 
-import { TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { OrchestrationV2CheckoutAttachWorkspace } from "./orchestrationV2.ts";
 
 /**
  * Input for the `t3_worktree_handoff` MCP tool.
@@ -95,6 +96,45 @@ export const WorktreeMcpHandoffResult = Schema.Struct({
 });
 export type WorktreeMcpHandoffResult = typeof WorktreeMcpHandoffResult.Type;
 
+const CheckoutProjectReference = TrimmedNonEmptyString.annotate({
+  description: "The other project: its id, its title, or its workspace root path.",
+});
+
+/** Input for `t3_checkout_attach`. */
+export const WorktreeMcpAttachCheckoutInput = Schema.Struct({
+  project: CheckoutProjectReference,
+  workspace: Schema.optional(
+    OrchestrationV2CheckoutAttachWorkspace.annotate({
+      description:
+        "Which checkout to attach: `root` (the project's main checkout as it is), `existing_worktree` (a worktree path of that project), or `worktree` (a new worktree branching from baseRef). Defaults to root.",
+    }),
+  ),
+  runSetupScript: Schema.optional(
+    Schema.Boolean.annotate({
+      description: "Run the project's setup script in a new worktree. Defaults to true.",
+    }),
+  ),
+});
+export type WorktreeMcpAttachCheckoutInput = typeof WorktreeMcpAttachCheckoutInput.Type;
+
+/** Input for `t3_checkout_detach`. */
+export const WorktreeMcpDetachCheckoutInput = Schema.Struct({
+  project: CheckoutProjectReference,
+});
+export type WorktreeMcpDetachCheckoutInput = typeof WorktreeMcpDetachCheckoutInput.Type;
+
+const WorktreeMcpAttachedCheckout = Schema.Struct({
+  projectId: ProjectId,
+  path: TrimmedNonEmptyString,
+  branch: Schema.NullOr(TrimmedNonEmptyString),
+});
+
+export const WorktreeMcpCheckoutChangeResult = Schema.Struct({
+  checkout: WorktreeMcpAttachedCheckout,
+  note: Schema.String,
+});
+export type WorktreeMcpCheckoutChangeResult = typeof WorktreeMcpCheckoutChangeResult.Type;
+
 export const WorktreeMcpStatusResult = Schema.Struct({
   attached: Schema.Boolean.annotate({
     description: "True when this thread is already attached to a git worktree.",
@@ -106,6 +146,9 @@ export const WorktreeMcpStatusResult = Schema.Struct({
   }),
   defaultStartFromOrigin: Schema.Boolean.annotate({
     description: "Server default used by t3_worktree_handoff when startFromOrigin is omitted.",
+  }),
+  attachedCheckouts: Schema.Array(WorktreeMcpAttachedCheckout).annotate({
+    description: "Checkouts of other projects attached to this thread.",
   }),
 });
 export type WorktreeMcpStatusResult = typeof WorktreeMcpStatusResult.Type;

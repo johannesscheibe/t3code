@@ -361,6 +361,52 @@ export const OrchestrationV2LimitRecoveryUpdate = Schema.Struct({
 );
 export type OrchestrationV2LimitRecoveryUpdate = typeof OrchestrationV2LimitRecoveryUpdate.Type;
 
+/**
+ * A checkout of another project that a thread's agent also works in. `id`
+ * names this attachment: its checkpoint refs are keyed by it, so attaching the
+ * same project again starts a fresh history.
+ */
+export const ThreadAttachedCheckout = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  projectId: ProjectId,
+  /** Null when the project's own workspace root is attached. */
+  worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  branch: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type ThreadAttachedCheckout = typeof ThreadAttachedCheckout.Type;
+
+/** Which checkout of a project to attach: its root, a worktree it has, or a new worktree. */
+export const OrchestrationV2CheckoutAttachWorkspace = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("root") }),
+  Schema.Struct({
+    type: Schema.Literal("existing_worktree"),
+    worktreePath: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("worktree"),
+    baseRef: TrimmedNonEmptyString,
+    branch: Schema.optional(TrimmedNonEmptyString),
+    startFromOrigin: Schema.optional(Schema.Boolean),
+  }),
+]);
+export type OrchestrationV2CheckoutAttachWorkspace =
+  typeof OrchestrationV2CheckoutAttachWorkspace.Type;
+
+export const OrchestrationV2AttachCheckoutInput = Schema.Struct({
+  commandId: CommandId,
+  threadId: ThreadId,
+  projectId: ProjectId,
+  workspace: OrchestrationV2CheckoutAttachWorkspace,
+  /** Run the project's setup script in a new worktree. Defaults to true. */
+  runSetupScript: Schema.optional(Schema.Boolean),
+});
+export type OrchestrationV2AttachCheckoutInput = typeof OrchestrationV2AttachCheckoutInput.Type;
+
+export class OrchestrationV2AttachCheckoutError extends Schema.TaggedError<OrchestrationV2AttachCheckoutError>()(
+  "OrchestrationV2AttachCheckoutError",
+  { message: Schema.String },
+) {}
+
 export const OrchestrationV2AppThread = Schema.Struct({
   ...OrchestrationV2CreationFields,
   id: ThreadId,
@@ -372,6 +418,7 @@ export const OrchestrationV2AppThread = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  attachedCheckouts: Schema.optional(Schema.Array(ThreadAttachedCheckout)),
   /** Pull request the user linked to this thread (#8160); optional so
       pre-linking servers still decode. */
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
@@ -1290,6 +1337,17 @@ export const OrchestrationV2CheckpointFileSummary = Schema.Struct({
 });
 export type OrchestrationV2CheckpointFileSummary = typeof OrchestrationV2CheckpointFileSummary.Type;
 
+/** An attached checkout's state at a checkpoint, captured under its own ref. */
+export const OrchestrationV2CheckpointCheckout = Schema.Struct({
+  attachmentId: ThreadAttachedCheckout.fields.id,
+  projectId: ProjectId,
+  cwd: TrimmedNonEmptyString,
+  ref: CheckpointRef,
+  status: Schema.Literals(["ready", "missing", "error"]),
+  files: Schema.Array(OrchestrationV2CheckpointFileSummary),
+});
+export type OrchestrationV2CheckpointCheckout = typeof OrchestrationV2CheckpointCheckout.Type;
+
 export const OrchestrationV2Checkpoint = Schema.Struct({
   id: CheckpointId,
   threadId: ThreadId,
@@ -1302,6 +1360,7 @@ export const OrchestrationV2Checkpoint = Schema.Struct({
   ref: CheckpointRef,
   status: Schema.Literals(["ready", "missing", "error", "stale"]),
   files: Schema.Array(OrchestrationV2CheckpointFileSummary),
+  checkouts: Schema.optional(Schema.Array(OrchestrationV2CheckpointCheckout)),
   capturedAt: Schema.DateTimeUtc,
 });
 export type OrchestrationV2Checkpoint = typeof OrchestrationV2Checkpoint.Type;
@@ -1935,6 +1994,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  attachedCheckouts: Schema.optional(Schema.Array(ThreadAttachedCheckout)),
   /** Pull request the user linked to this thread (#8160). */
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   pullRequests: Schema.optional(Schema.Array(ThreadPullRequestLink)),
@@ -2845,6 +2905,12 @@ export const OrchestrationV2Command = Schema.Union([
     linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   }),
   Schema.Struct({
+    type: Schema.Literal("thread.checkout.detach"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    projectId: ProjectId,
+  }),
+  Schema.Struct({
     type: Schema.Literal("thread.pull-request.link"),
     commandId: CommandId,
     threadId: ThreadId,
@@ -3160,6 +3226,13 @@ export type OrchestrationV2Command = typeof OrchestrationV2Command.Type;
  * send them.
  */
 const OrchestrationV2InternalCommand = Schema.Union([
+  /** Records a checkout the server attached; the RPC and MCP tool provision it first. */
+  Schema.Struct({
+    type: Schema.Literal("thread.checkout.attach"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    checkout: ThreadAttachedCheckout,
+  }),
   /**
    * Records what a pull request watch saw, and wakes the agent in the same transaction when
    * `wake` is set. Rejected once the watch started at `startedAt` has ended, and a wake is
@@ -3248,6 +3321,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   stopWorkflow: "orchestration.stopWorkflow",
   getTurnItem: "orchestration.getTurnItem",
   launchThread: "orchestration.launchThread",
+  attachCheckout: "orchestration.attachCheckout",
   subscribeArchivedShell: "orchestration.subscribeArchivedShell",
   subscribeShell: "orchestration.subscribeShell",
   subscribeThread: "orchestration.subscribeThread",
@@ -3767,6 +3841,10 @@ export const OrchestrationV2RpcSchemas = {
   launchThread: {
     input: OrchestrationV2ThreadLaunchInput,
     output: OrchestrationV2ThreadLaunchResult,
+  },
+  attachCheckout: {
+    input: OrchestrationV2AttachCheckoutInput,
+    output: ThreadAttachedCheckout,
   },
   subscribeArchivedShell: {
     input: Schema.Struct({}),

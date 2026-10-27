@@ -14,6 +14,7 @@ import type {
   ProjectContentMatch,
   ProjectEntry,
   ProjectEntryKind,
+  ProjectId,
   ThreadId,
   TurnItemId,
   VcsListRefsResult,
@@ -340,8 +341,13 @@ export function useProjectContentSearch(target: ProjectContentSearchTarget) {
   };
 }
 
+/** `projectId` diffs that attached checkout instead of the thread's workspace. */
+export type ThreadCheckpointDiffTarget = CheckpointDiffTarget & {
+  readonly projectId?: ProjectId | null;
+};
+
 export function useCheckpointDiff(
-  target: CheckpointDiffTarget,
+  target: ThreadCheckpointDiffTarget,
   options?: { readonly enabled?: boolean },
 ) {
   const enabled =
@@ -358,6 +364,7 @@ export function useCheckpointDiff(
             threadId: target.threadId!,
             toTurnCount: target.toTurnCount!,
             ignoreWhitespace: target.ignoreWhitespace,
+            ...(target.projectId ? { projectId: target.projectId } : {}),
           },
         }
       : null;
@@ -370,6 +377,7 @@ export function useCheckpointDiff(
             fromTurnCount: target.fromTurnCount!,
             toTurnCount: target.toTurnCount!,
             ignoreWhitespace: target.ignoreWhitespace,
+            ...(target.projectId ? { projectId: target.projectId } : {}),
           },
         }
       : null;

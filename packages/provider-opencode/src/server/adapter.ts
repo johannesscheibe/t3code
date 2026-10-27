@@ -688,6 +688,16 @@ export function openCodePermissionRules(
     }
   }
 
+  // Attached checkouts are reached like the workspace itself; edits there
+  // follow the edit rules above.
+  for (const directory of runtimePolicy.additionalDirectories ?? []) {
+    rules.push({
+      permission: "external_directory",
+      pattern: `${directory.replace(/\/$/, "")}/*`,
+      action: "allow",
+    });
+  }
+
   if (!requiresApproval && sandboxType === "workspaceWrite") {
     const writableRoots = recordValue(sandboxPolicy, "writableRoots");
     if (Array.isArray(writableRoots)) {
@@ -3258,6 +3268,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 buildRuntimeInstructions({
                   harness: "OpenCode",
                   model: turnInput.modelSelection.model,
+                  additionalDirectories: turnInput.runtimePolicy.additionalDirectories,
                 }),
               ]
                 .filter(Boolean)

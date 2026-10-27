@@ -1,10 +1,13 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, it, vi } from "@effect/vitest";
-import { CheckpointRef, CheckpointScopeId, RunId, ThreadId } from "@t3tools/contracts";
+import { CheckpointRef, CheckpointScopeId, ProjectId, RunId, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
-import { checkpointRefForScopeOrdinal } from "../orchestration-v2/CheckpointService.ts";
+import {
+  checkpointRefForCheckoutOrdinal,
+  checkpointRefForScopeOrdinal,
+} from "../orchestration-v2/CheckpointService.ts";
 import { OrchestratorProjectionError } from "../orchestration-v2/Orchestrator.ts";
 import type { ProjectionCheckpointContext } from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
@@ -92,6 +95,55 @@ it.effect("computes V2 run diffs from projected checkpoint scopes", () => {
       fallbackFromToHead: false,
       ignoreWhitespace: true,
     });
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("diffs an attached checkout from the run before it was first captured", () => {
+  const projectId = ProjectId.make("project:attached");
+  const checkoutRef = CheckpointRef.make("refs/t3/test/checkout-2");
+  const projection = makeProjection();
+  const diffCheckpoints = vi.fn((_input: CheckpointStore.DiffCheckpointsInput) =>
+    Effect.succeed("diff --git a/other b/other"),
+  );
+  const layer = layerFor({
+    projection: Effect.succeed({
+      ...projection,
+      checkpoints: projection.checkpoints.map((checkpoint) => ({
+        ...checkpoint,
+        checkouts: [
+          {
+            attachmentId: "checkout:1",
+            projectId,
+            cwd: "/other",
+            ref: checkoutRef,
+            status: "ready" as const,
+          },
+        ],
+      })),
+    }),
+    diffCheckpoints,
+  });
+
+  return Effect.gen(function* () {
+    const query = yield* CheckpointDiffQuery.CheckpointDiffQuery;
+    // Attached before run 2, so the full diff starts at its baseline for run 2.
+    yield* query.getFullThreadDiff({ threadId, toTurnCount: 2, projectId });
+    assert.deepEqual(diffCheckpoints.mock.calls[0]?.[0], {
+      cwd: "/other",
+      fromCheckpointRef: yield* checkpointRefForCheckoutOrdinal({
+        threadId,
+        attachmentId: "checkout:1",
+        ordinalWithinScope: 1,
+      }),
+      toCheckpointRef: checkoutRef,
+      fallbackFromToHead: false,
+      ignoreWhitespace: true,
+    });
+
+    const unattached = yield* Effect.flip(
+      query.getFullThreadDiff({ threadId, toTurnCount: 2, projectId: ProjectId.make("p:none") }),
+    );
+    assert.instanceOf(unattached, CheckpointRefUnavailableError);
   }).pipe(Effect.provide(layer));
 });
 

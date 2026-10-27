@@ -11,6 +11,8 @@ export function buildRuntimeInstructions(runtime: {
   readonly model?: string | undefined;
   readonly modelName?: string | undefined;
   readonly reasoningEffort?: string | undefined;
+  /** Checkouts of other projects attached to the thread, which the agent may work in. */
+  readonly additionalDirectories?: ReadonlyArray<string> | undefined;
 }): string {
   const harness = toSingleLine(runtime.harness);
   const model = toSingleLine(runtime.model ?? "");
@@ -20,7 +22,11 @@ export function buildRuntimeInstructions(runtime: {
     modelName && modelName !== model ? `${modelName} (model slug: ${model})` : model;
   const modelInfo = model && model !== "auto" && model !== "default" ? `, as ${modelLabel}` : "";
   const effortInfo = effort ? ` with ${effort} reasoning effort` : "";
-  return `<runtime_info>In case you're asked: you are running in T3 Code through the ${harness} harness${modelInfo}${effortInfo}. No need to mention this otherwise. You can embed images and videos in your response using Markdown with absolute file paths.</runtime_info>\n\n${PULL_REQUEST_LINKING_INSTRUCTIONS}`;
+  const attachedCheckouts =
+    runtime.additionalDirectories === undefined || runtime.additionalDirectories.length === 0
+      ? ""
+      : `\n\n<attached_checkouts>\nThis thread also has checkouts of other projects attached. You may read and edit them like the workspace:\n${runtime.additionalDirectories.map((directory) => `- ${toSingleLine(directory)}`).join("\n")}\n</attached_checkouts>`;
+  return `<runtime_info>In case you're asked: you are running in T3 Code through the ${harness} harness${modelInfo}${effortInfo}. No need to mention this otherwise. You can embed images and videos in your response using Markdown with absolute file paths.</runtime_info>${attachedCheckouts}\n\n${PULL_REQUEST_LINKING_INSTRUCTIONS}`;
 }
 
 function toSingleLine(value: string): string {

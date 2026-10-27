@@ -178,6 +178,23 @@ On web and desktop, right-click a pull request link in a thread and choose
 same link to return to the branch PR, if one exists.
 The linked pull request participates in automatic settlement.
 
+## Work in other projects
+
+A thread can also work in other projects' checkouts, for changes that span
+repositories. On web and desktop, open the thread details and use **+** in the
+**Checkouts** section. Pick a project, then use its checkout as it is or create
+a new worktree for this thread. Each checkout's menu opens its files or its
+changes. The agent can attach and detach checkouts itself with T3 Code's
+`t3_checkout_attach` and `t3_checkout_detach` tools.
+
+The Files and Diff panels switch between the thread's workspace and each
+checkout. Turn diffs cover a checkout from the moment it is attached. If you
+attach or detach a checkout while the agent is working, the agent sees the
+change in its next turn. Detaching keeps the files, and you can then remove a
+worktree no other thread uses. Edits made in a checkout during the turn that
+detaches it are not in that turn's diff. Cursor agents are not given access to
+attached checkouts. Mobile shows them in the Git sheet.
+
 ## Find and reference work
 
 On web and desktop, open the command palette with `Cmd/Ctrl+K` to search threads

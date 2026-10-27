@@ -20,6 +20,7 @@ import * as ProjectStore from "./ProjectStore.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
 
 const projectId = ProjectId.make("project:runtime-policy");
+const deletedProjectId = ProjectId.make("project:deleted");
 const providerInstanceId = ProviderInstanceId.make("codex");
 const modelSelection = {
   instanceId: providerInstanceId,
@@ -30,6 +31,7 @@ function makeThread(input: {
   readonly now: DateTime.Utc;
   readonly worktreePath: string | null;
   readonly runtimeMode?: RuntimeMode;
+  readonly attachedCheckouts?: OrchestrationV2AppThread["attachedCheckouts"];
 }): OrchestrationV2AppThread {
   const threadId = ThreadId.make("thread:runtime-policy");
   return {
@@ -44,6 +46,9 @@ function makeThread(input: {
     interactionMode: "default",
     branch: null,
     worktreePath: input.worktreePath,
+    ...(input.attachedCheckouts === undefined
+      ? {}
+      : { attachedCheckouts: input.attachedCheckouts }),
     activeProviderThreadId: null,
     lineage: {
       parentThreadId: null,
@@ -88,22 +93,24 @@ const layerTest = RuntimePolicy.layerFromProjectStore.pipe(
   ),
   Layer.provide(
     Layer.mock(ProjectStore.ProjectStoreV2)({
-      get: () =>
+      get: (id) =>
         Effect.succeed(
-          Option.some({
-            projectId,
-            title: "Project",
-            workspaceRoot: "/project-root",
-            defaultModelSelection: null,
-            defaultThreadEnvMode: null,
-            autoPull: false,
-            faviconPath: null,
-            projectIcon: null,
-            scripts: [],
-            createdAt: "2026-06-21T00:00:00.000Z",
-            updatedAt: "2026-06-21T00:00:00.000Z",
-            deletedAt: null,
-          }),
+          id === deletedProjectId
+            ? Option.none()
+            : Option.some({
+                projectId: id,
+                title: "Project",
+                workspaceRoot: id === projectId ? "/project-root" : `/root-of/${id}`,
+                defaultModelSelection: null,
+                defaultThreadEnvMode: null,
+                autoPull: false,
+                faviconPath: null,
+                projectIcon: null,
+                scripts: [],
+                createdAt: "2026-06-21T00:00:00.000Z",
+                updatedAt: "2026-06-21T00:00:00.000Z",
+                deletedAt: null,
+              }),
         ),
     }),
   ),
@@ -131,6 +138,36 @@ it.layer(layerTest)("RuntimePolicyV2", (it) => {
         modelSelection,
       });
       assert.equal(resolved.cwd, "/project-worktree");
+    }),
+  );
+
+  it.effect("grants attached checkouts as additional directories", () =>
+    Effect.gen(function* () {
+      const policy = yield* RuntimePolicy.RuntimePolicyV2;
+      const now = yield* DateTime.now;
+      const otherProjectId = ProjectId.make("project:other");
+      const resolved = yield* policy.resolve({
+        thread: makeThread({
+          now,
+          worktreePath: null,
+          attachedCheckouts: [
+            { id: "a", projectId: otherProjectId, worktreePath: null, branch: "main" },
+            { id: "b", projectId: otherProjectId, worktreePath: "/other-worktree", branch: "x" },
+            // A deleted project has nothing to grant.
+            { id: "c", projectId: deletedProjectId, worktreePath: null, branch: null },
+          ],
+        }),
+        modelSelection,
+      });
+      assert.deepStrictEqual(resolved.additionalDirectories, [
+        "/root-of/project:other",
+        "/other-worktree",
+      ]);
+      const plain = yield* policy.resolve({
+        thread: makeThread({ now, worktreePath: null }),
+        modelSelection,
+      });
+      assert.equal(plain.additionalDirectories, undefined);
     }),
   );
 

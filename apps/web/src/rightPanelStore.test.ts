@@ -286,6 +286,40 @@ describe("rightPanelStore", () => {
     );
   });
 
+  it("retargets the Files tab in place when switching checkouts", () => {
+    const store = useRightPanelStore.getState();
+    store.open(refA, "files");
+    store.openFiles(refA, "project-b");
+    store.openFiles(refA, "project-c");
+    const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(state.surfaces.filter((surface) => surface.kind === "files")).toEqual([
+      { id: "files", kind: "files", projectId: "project-c" },
+    ]);
+    expect(state.activeSurfaceId).toBe("files");
+
+    store.openFiles(refA, null);
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces.find(
+        (surface) => surface.kind === "files",
+      ),
+    ).toEqual({ id: "files", kind: "files" });
+  });
+
+  it("keeps the browsed checkout of a saved Files tab", () => {
+    const migrated = migratePersistedRightPanelState({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: "files",
+          surfaces: [{ id: "files", kind: "files", projectId: "project-b" }],
+        },
+      },
+    });
+    expect(migrated.byThreadKey["env-1:thread-A"]?.surfaces).toEqual([
+      { id: "files", kind: "files", projectId: "project-b" },
+    ]);
+  });
+
   it("allows automatic panels for a later turn after a manual choice", () => {
     const store = useRightPanelStore.getState();
     const firstTurnRevision = store.getUserActionRevision(refA);

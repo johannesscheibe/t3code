@@ -13,6 +13,7 @@ import * as Schema from "effect/Schema";
 
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import { resolveAttachedCheckoutRoots } from "./AttachedCheckouts.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 
 /**
@@ -125,10 +126,25 @@ export const layerFromProjectStore: Layer.Layer<
               }),
             ),
           ));
+        const additionalDirectories = yield* resolveAttachedCheckoutRoots(
+          input.thread,
+          projects,
+        ).pipe(
+          Effect.map((roots) => roots.map((root) => root.cwd)),
+          Effect.mapError(
+            (cause) =>
+              new RuntimePolicyResolveError({
+                projectId: input.thread.projectId,
+                providerInstanceId: input.modelSelection.instanceId,
+                cause,
+              }),
+          ),
+        );
         return ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
           runtimeMode: providerRuntimeMode(input.thread.runtimeMode, supportedRuntimeModes),
           interactionMode: input.thread.interactionMode,
           cwd,
+          ...(additionalDirectories.length === 0 ? {} : { additionalDirectories }),
         });
       }),
     });

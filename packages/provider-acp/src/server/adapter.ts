@@ -130,8 +130,16 @@ export const ACP_PROTOCOL = "acp.ndjson-jsonrpc" as const;
  */
 const ACP_DEFERRED_FINALIZE_DEBOUNCE: Duration.Input = "3000 millis";
 
+function policyWorkspaceRoots(
+  policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
+): ReadonlyArray<string> {
+  return [...(policy.cwd === null ? [] : [policy.cwd]), ...(policy.additionalDirectories ?? [])];
+}
+
 export interface AcpAdapterV2RuntimeInput {
   readonly cwd: string;
+  /** The thread's attached checkouts, sent with every session lifecycle request. */
+  readonly additionalDirectories?: ReadonlyArray<string>;
   /**
    * Policy the session opened with. A runtime-mode change reopens the session,
    * so flavors that encode permissions in the launch command (Grok) read it here.
@@ -263,18 +271,18 @@ export interface AcpAdapterV2Flavor {
    * Opts the session into the ACP client `fs` capability. Agents read and write
    * files themselves under their own permission model unless a flavor sets
    * this. Requests pass the runtime policy guard, then these handlers, which
-   * receive the cwd of the policy active when the request arrives (null when
-   * the session has no workspace). Antigravity sets it and confines requests
-   * to that workspace.
+   * receive the workspace roots of the policy active when the request arrives:
+   * its cwd (when the session has a workspace) and the thread's attached
+   * checkouts. Antigravity sets it and confines requests to those roots.
    */
   readonly clientFileSystem?: {
     readonly readTextFile: (
       request: EffectAcpSchema.ReadTextFileRequest,
-      cwd: string | null,
+      workspaceRoots: ReadonlyArray<string>,
     ) => Effect.Effect<EffectAcpSchema.ReadTextFileResponse, EffectAcpErrors.AcpError>;
     readonly writeTextFile: (
       request: EffectAcpSchema.WriteTextFileRequest,
-      cwd: string | null,
+      workspaceRoots: ReadonlyArray<string>,
     ) => Effect.Effect<EffectAcpSchema.WriteTextFileResponse, EffectAcpErrors.AcpError>;
   };
   /**
@@ -2108,6 +2116,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         ): AcpAdapterV2RuntimeInput => {
           return {
             cwd: input.runtimePolicy.cwd ?? process.cwd(),
+            ...(input.runtimePolicy.additionalDirectories === undefined
+              ? {}
+              : { additionalDirectories: input.runtimePolicy.additionalDirectories }),
             runtimePolicy: input.runtimePolicy,
             mcpServers: mcpContext.servers,
             acpMcpServers: mcpContext.acpServers,
@@ -5637,12 +5648,16 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           if (clientFileSystem !== undefined) {
             yield* targetRuntime.handleReadTextFile((request) =>
               clientPolicyContext.pipe(
-                Effect.flatMap(({ policy }) => clientFileSystem.readTextFile(request, policy.cwd)),
+                Effect.flatMap(({ policy }) =>
+                  clientFileSystem.readTextFile(request, policyWorkspaceRoots(policy)),
+                ),
               ),
             );
             yield* targetRuntime.handleWriteTextFile((request) =>
               clientPolicyContext.pipe(
-                Effect.flatMap(({ policy }) => clientFileSystem.writeTextFile(request, policy.cwd)),
+                Effect.flatMap(({ policy }) =>
+                  clientFileSystem.writeTextFile(request, policyWorkspaceRoots(policy)),
+                ),
               ),
             );
           }
@@ -6851,6 +6866,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             text: buildRuntimeInstructions({
               harness: flavor.runtimeHarness ?? driver,
               model: turnInput.modelSelection.model,
+              additionalDirectories: turnInput.runtimePolicy.additionalDirectories,
             }),
           });
           return { prompt, instructionState: text === messageText ? undefined : instructionState };

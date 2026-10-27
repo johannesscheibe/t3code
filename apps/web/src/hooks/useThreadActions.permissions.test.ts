@@ -27,6 +27,7 @@ const state = vi.hoisted(() => ({
     projectId: ProjectId;
     title: string;
     worktreePath: string | null;
+    attachedCheckouts: [];
     session: { status: "ready" | "stopped" } | null;
     latestTurn: null;
   }[],
@@ -220,6 +221,7 @@ beforeEach(() => {
       projectId: ProjectId.make("project"),
       title: "Thread",
       worktreePath: null,
+      attachedCheckouts: [],
       session: null,
       latestTurn: null,
     },

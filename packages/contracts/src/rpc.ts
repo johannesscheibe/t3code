@@ -215,6 +215,7 @@ import {
   OrchestrationV2GetThreadProjectionError,
   OrchestrationV2RpcSchemas,
   OrchestrationV2ThreadLaunchError,
+  OrchestrationV2AttachCheckoutError,
 } from "./orchestrationV2.ts";
 import {
   ProjectCreateNewInput,
@@ -1705,6 +1706,12 @@ const WsOrchestrationV2LaunchThreadRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.la
   error: Schema.Union([OrchestrationV2ThreadLaunchError, EnvironmentAuthorizationError]),
 });
 
+const WsOrchestrationV2AttachCheckoutRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.attachCheckout, {
+  payload: OrchestrationV2RpcSchemas.attachCheckout.input,
+  success: OrchestrationV2RpcSchemas.attachCheckout.output,
+  error: Schema.Union([OrchestrationV2AttachCheckoutError, EnvironmentAuthorizationError]),
+});
+
 const WsOrchestrationV2SubscribeArchivedShellRpc = Rpc.make(
   ORCHESTRATION_V2_WS_METHODS.subscribeArchivedShell,
   {
@@ -2066,6 +2073,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2GetArchivedShellSnapshotRpc,
   WsOrchestrationV2GetThreadProjectionRpc,
   WsOrchestrationV2LaunchThreadRpc,
+  WsOrchestrationV2AttachCheckoutRpc,
   WsOrchestrationV2SubscribeArchivedShellRpc,
   WsOrchestrationV2SubscribeShellRpc,
   WsOrchestrationV2SubscribeThreadRpc,

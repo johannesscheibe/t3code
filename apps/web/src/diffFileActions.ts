@@ -9,6 +9,8 @@ interface OpenDiffFilePrimaryActionInput {
   readonly filePath: string;
   readonly activeCwd: string | undefined;
   readonly repositoryRoot?: string | undefined;
+  /** Open by absolute path, as files of an attached checkout are. */
+  readonly absolutePath?: boolean;
   readonly openInEditor: (targetPath: string) => void;
 }
 
@@ -82,6 +84,7 @@ export function openDiffFilePrimaryAction({
   filePath,
   activeCwd,
   repositoryRoot,
+  absolutePath,
   openInEditor,
 }: OpenDiffFilePrimaryActionInput): void {
   const workspaceFilePath = resolveDiffPathForWorkspace({
@@ -92,7 +95,14 @@ export function openDiffFilePrimaryAction({
   if (!workspaceFilePath) return;
 
   if (threadRef) {
-    useRightPanelStore.getState().openFile(threadRef, workspaceFilePath);
+    useRightPanelStore
+      .getState()
+      .openFile(
+        threadRef,
+        absolutePath && activeCwd
+          ? resolvePathLinkTarget(workspaceFilePath, activeCwd)
+          : workspaceFilePath,
+      );
     return;
   }
 

@@ -41,6 +41,7 @@ import type {
 import {
   OrchestrationV2AppThreadJson as OrchestrationV2AppThreadJsonSchema,
   OrchestrationV2CheckpointJson as OrchestrationV2CheckpointJsonSchema,
+  OrchestrationV2CheckpointCheckout,
   OrchestrationV2CheckpointScopeJson as OrchestrationV2CheckpointScopeJsonSchema,
   OrchestrationV2ContextHandoffJson as OrchestrationV2ContextHandoffJsonSchema,
   OrchestrationV2ContextTransferJson as OrchestrationV2ContextTransferJsonSchema,
@@ -230,6 +231,22 @@ const ProjectionCheckpointContext = Schema.Struct({
         appRunOrdinal,
         status,
         ref,
+        // Attached checkouts' entries, without their file summaries.
+        checkouts: Schema.optionalKey(
+          Schema.fromJsonString(
+            Schema.Array(
+              OrchestrationV2CheckpointCheckout.mapFields(
+                ({ attachmentId, projectId, cwd, ref, status }) => ({
+                  attachmentId,
+                  projectId,
+                  cwd,
+                  ref,
+                  status,
+                }),
+              ),
+            ),
+          ),
+        ),
       }),
     ),
   ),
@@ -1470,6 +1487,9 @@ export function threadShellFromProjection(
     interactionMode: projection.thread.interactionMode,
     branch: projection.thread.branch,
     worktreePath: projection.thread.worktreePath,
+    ...(projection.thread.attachedCheckouts === undefined
+      ? {}
+      : { attachedCheckouts: projection.thread.attachedCheckouts }),
     pullRequests: threadPullRequestsOf(projection.thread),
     ...(projection.thread.linkedPullRequest === undefined
       ? {}
@@ -1738,6 +1758,9 @@ function shellFromState(input: {
     interactionMode: input.state.thread.interactionMode,
     branch: input.state.thread.branch,
     worktreePath: input.state.thread.worktreePath,
+    ...(input.state.thread.attachedCheckouts === undefined
+      ? {}
+      : { attachedCheckouts: input.state.thread.attachedCheckouts }),
     pullRequests: threadPullRequestsOf(input.state.thread),
     ...(input.state.thread.linkedPullRequest === undefined
       ? {}
@@ -4594,7 +4617,17 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               sql`
               SELECT scope_id AS "scopeId", run_id AS "runId",
                 app_run_ordinal AS "appRunOrdinal", status,
-                json_extract(payload_json, '$.ref') AS ref
+                json_extract(payload_json, '$.ref') AS ref,
+                (
+                  SELECT json_group_array(json_object(
+                    'attachmentId', json_extract(entry.value, '$.attachmentId'),
+                    'projectId', json_extract(entry.value, '$.projectId'),
+                    'cwd', json_extract(entry.value, '$.cwd'),
+                    'ref', json_extract(entry.value, '$.ref'),
+                    'status', json_extract(entry.value, '$.status')
+                  ))
+                  FROM json_each(payload_json, '$.checkouts') AS entry
+                ) AS checkouts
               FROM orchestration_v2_projection_checkpoints
               WHERE thread_id = ${threadId}
               ORDER BY scope_id ASC, ordinal_within_scope ASC
@@ -6412,7 +6445,12 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
               cwd,
             })),
             checkpoints: projection.checkpoints.map(
-              ({ scopeId, runId, appRunOrdinal, status, ref }) => ({
+              ({ scopeId, runId, appRunOrdinal, status, ref, checkouts }) => ({
+                ...(checkouts === undefined
+                  ? {}
+                  : {
+                      checkouts: checkouts.map(({ files: _files, ...entry }) => entry),
+                    }),
                 scopeId,
                 runId,
                 appRunOrdinal,

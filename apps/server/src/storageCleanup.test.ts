@@ -443,6 +443,34 @@ describe("storage cleanup reports and local file policies", () => {
       }),
     ),
   );
+  it.live("keeps a worktree another thread has attached", () =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const fixture = yield* cleanupFixture;
+        fixture.setThreads([
+          shell({ branch: "feature", worktreePath: fixture.worktree }),
+          shell({
+            id: ThreadId.make("thread:attaching"),
+            attachedCheckouts: [
+              {
+                id: "checkout:1",
+                projectId: ProjectId.make("project:other"),
+                worktreePath: fixture.worktree,
+                branch: "feature",
+              },
+            ],
+          }),
+        ]);
+        const report = yield* fixture.service.runNow;
+        expect(report.entries[0]).toMatchObject({
+          outcome: "kept",
+          reason: "Attached to another thread",
+        });
+        expect(yield* fs.exists(fixture.worktree)).toBe(true);
+      }),
+    ),
+  );
   it.live("does not measure a worktree kept for an open provider session", () =>
     runCleanupTest(
       Effect.gen(function* () {

@@ -36,6 +36,7 @@ import {
   NativeStackScreenOptions,
   nativeHeaderScrollEdgeEffects,
 } from "../../../native/StackHeader";
+import { useProjects } from "../../../state/entities";
 import { useEnvironmentQuery } from "../../../state/query";
 import { useThreadSelection } from "../../../state/use-thread-selection";
 import { useSelectedThreadGitActions } from "../../../state/use-selected-thread-git-actions";
@@ -86,6 +87,25 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
         supportsLinkedPrSnapshots ? (selectedThread?.pullRequests ?? []) : [],
       ),
     [selectedThread?.pullRequests, supportsLinkedPrSnapshots],
+  );
+  const projects = useProjects();
+  // Read-only here; attach and detach from the web app or the agent.
+  const attachedCheckouts = useMemo(
+    () =>
+      (selectedThread?.attachedCheckouts ?? []).map((checkout) => {
+        const project = projects.find(
+          (candidate) =>
+            candidate.environmentId === selectedThread?.environmentId &&
+            candidate.id === checkout.projectId,
+        );
+        return {
+          id: checkout.id,
+          projectTitle: project?.title ?? "Project",
+          branch: checkout.branch,
+          path: checkout.worktreePath ?? project?.workspaceRoot ?? "",
+        };
+      }),
+    [projects, selectedThread?.attachedCheckouts, selectedThread?.environmentId],
   );
   const gitState = useSelectedThreadGitState();
   const gitActions = useSelectedThreadGitActions();
@@ -401,6 +421,14 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
       ) : null}
 
       {currentWorktreePath ? <MetaCard label="Worktree" value={currentWorktreePath} /> : null}
+
+      {attachedCheckouts.map((checkout) => (
+        <MetaCard
+          key={checkout.id}
+          label={`Attached · ${checkout.projectTitle}${checkout.branch === null ? "" : ` · ${checkout.branch}`}`}
+          value={checkout.path}
+        />
+      ))}
     </ScrollView>
   );
 

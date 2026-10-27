@@ -415,6 +415,7 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
               resumeCount: current.resumeCount + 1,
             })).pipe(Effect.as(threadInput.providerThread)),
           startTurn: () => options.startTurn ?? Effect.void,
+          compactThread: () => Effect.void,
           steerTurn: () => Effect.void,
           interruptTurn: () =>
             Ref.update(state, (current) => ({
@@ -1087,6 +1088,87 @@ it.effect("ProviderSessionManagerV2 opens a duplicate session only once", () =>
           state,
           idleTimeoutMs: 60_000,
           beforeOpen,
+        }),
+      ),
+    );
+  }),
+);
+
+it.effect("ProviderSessionManagerV2 reopens a session when its attached checkouts change", () =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    const backgroundWork = yield* Ref.make(false);
+    const effect = Effect.gen(function* () {
+      const eventSink = yield* EventSink.EventSinkV2;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread-provider-session-manager-checkouts");
+      const providerSessionId = yield* idAllocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId,
+      });
+      yield* eventSink.write({
+        events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+      });
+      const open = (additionalDirectories?: ReadonlyArray<string>) =>
+        manager.open({
+          threadId,
+          providerSessionId,
+          modelSelection,
+          runtimePolicy: {
+            ...runtimePolicy,
+            ...(additionalDirectories === undefined ? {} : { additionalDirectories }),
+          },
+        });
+
+      const first = yield* open();
+      assert.strictEqual(yield* open([]), first);
+      const attached = yield* open(["/repos/other"]);
+      assert.notStrictEqual(attached, first);
+      assert.strictEqual(yield* open(["/repos/other"]), attached);
+
+      // Background work lives in the provider process, so the reload waits.
+      yield* Ref.set(backgroundWork, true);
+      assert.strictEqual(yield* open(), attached);
+      yield* Ref.set(backgroundWork, false);
+      const reloaded = yield* open();
+      assert.notStrictEqual(reloaded, attached);
+
+      // Nor does it end a running turn, such as a compaction a rollback lands in.
+      const runId = idAllocator.derive.run({ threadId, ordinal: 1 });
+      yield* reloaded.compactThread!({
+        appThread: (yield* projectionStore.getThreadProjection(threadId)).thread,
+        threadId,
+        runId,
+        runOrdinal: 1,
+        providerTurnOrdinal: 1,
+        attemptId: idAllocator.derive.runAttempt({ runId, attemptOrdinal: 1 }),
+        rootNodeId: idAllocator.derive.rootNode({ runId }),
+        providerThread: makeProviderThread({ idAllocator, threadId, providerSessionId, now }),
+        message: {
+          createdBy: "user",
+          creationSource: "web",
+          messageId: yield* idAllocator.allocate.message({ threadId, ordinal: 1 }),
+          text: "hello",
+          attachments: [],
+        },
+        modelSelection,
+        runtimePolicy,
+      });
+      assert.strictEqual(yield* open(["/repos/other"]), reloaded);
+      const { openCount, closeCount } = yield* Ref.get(state);
+      assert.deepEqual({ openCount, closeCount }, { openCount: 3, closeCount: 2 });
+    });
+
+    yield* effect.pipe(
+      Effect.provide(
+        layerTest({
+          state,
+          idleTimeoutMs: 60_000,
+          capabilities: ExclusiveCapabilities,
+          hasPendingBackgroundWork: Ref.get(backgroundWork),
         }),
       ),
     );

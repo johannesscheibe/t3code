@@ -11,6 +11,7 @@ import {
   type MessageId,
   type ModelSelection,
   type NodeId,
+  type OrchestrationV2AttachCheckoutInput,
   type OrchestrationV2Command,
   type OrchestrationV2CreationSource,
   type PlanId,
@@ -1100,6 +1101,34 @@ export const unlinkThreadPullRequest = Effect.fn("EnvironmentCommands.unlinkThre
     return yield* dispatch({
       ...input,
       type: "thread.pull-request.unlink",
+      commandId: yield* allocateCommandId(input),
+    });
+  },
+);
+
+export type AttachThreadCheckoutInput = Omit<OrchestrationV2AttachCheckoutInput, "commandId"> &
+  CommandMetadata;
+/** Provisions the checkout on the server (a new worktree when asked), then attaches it. */
+export const attachThreadCheckout = Effect.fn("EnvironmentCommands.attachThreadCheckout")(
+  function* (input: AttachThreadCheckoutInput) {
+    const { commandId: _commandId, ...attach } = input;
+    return yield* request(ORCHESTRATION_V2_WS_METHODS.attachCheckout, {
+      ...attach,
+      commandId: yield* allocateCommandId(input),
+    });
+  },
+);
+
+export type DetachThreadCheckoutInput = Omit<
+  Extract<OrchestrationV2Command, { type: "thread.checkout.detach" }>,
+  "type" | "commandId"
+> &
+  CommandMetadata;
+export const detachThreadCheckout = Effect.fn("EnvironmentCommands.detachThreadCheckout")(
+  function* (input: DetachThreadCheckoutInput) {
+    return yield* dispatch({
+      ...input,
+      type: "thread.checkout.detach",
       commandId: yield* allocateCommandId(input),
     });
   },

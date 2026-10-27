@@ -25,6 +25,7 @@ import {
   OrchestratorDispatchError,
   OrchestratorProjectionError,
 } from "../orchestration-v2/Orchestrator.ts";
+import * as ThreadCheckoutService from "../orchestration-v2/ThreadCheckoutService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
@@ -37,6 +38,8 @@ const environmentId = EnvironmentId.make("environment-worktree-test");
 const threadId = ThreadId.make("thread-worktree-test");
 const projectId = ProjectId.make("project-worktree-test");
 const workspaceRoot = "/repo/project";
+const otherProjectId = ProjectId.make("project-other");
+const otherWorkspaceRoot = "/repo/other";
 
 const makeScope = (
   capabilities: ReadonlySet<McpInvocationContext.McpCapability>,
@@ -58,6 +61,7 @@ interface ThreadFixture {
   readonly worktreePath?: string | null;
   readonly archivedAt?: string | null;
   readonly deletedAt?: string | null;
+  readonly attachedCheckouts?: OrchestrationV2ThreadProjection["thread"]["attachedCheckouts"];
 }
 
 const makeProjection = (overrides: ThreadFixture = {}): OrchestrationV2ThreadProjection =>
@@ -84,6 +88,12 @@ const project: Project = {
   updatedAt: "2026-01-01T00:00:00.000Z",
   deletedAt: null,
 } as Project;
+const otherProject: Project = {
+  ...project,
+  id: otherProjectId,
+  title: "Other Project",
+  workspaceRoot: otherWorkspaceRoot,
+};
 
 interface HarnessOptions {
   readonly thread?: ThreadFixture | null;
@@ -195,7 +205,9 @@ const makeHarness = (options: HarnessOptions = {}) => {
       : Effect.succeed(
           id === projectId && options.projectMissing !== true
             ? Option.some(project)
-            : Option.none(),
+            : id === otherProjectId
+              ? Option.some(otherProject)
+              : Option.none(),
         ),
   );
   const removeWorktree = vi.fn((_: unknown) =>
@@ -261,6 +273,14 @@ const makeHarness = (options: HarnessOptions = {}) => {
     }),
   );
   const refreshStatus = vi.fn((_: string) => Effect.die("refreshStatus stub"));
+  const attach = vi.fn((input: { readonly projectId: ProjectId }) =>
+    Effect.succeed({
+      id: "checkout:test",
+      projectId: input.projectId,
+      worktreePath: null,
+      branch: "main",
+    }),
+  );
   const runForThread = vi.fn((input: { readonly worktreePath: string }) => {
     switch (options.setupScript ?? "started") {
       case "no-script":
@@ -314,7 +334,27 @@ const makeHarness = (options: HarnessOptions = {}) => {
         } satisfies Partial<ThreadManagementService.ThreadManagementService["Service"]>),
         Layer.mock(ProjectService.ProjectService)({
           getById,
+          // Like the real lookup, a path that can't be normalized fails.
+          getByWorkspaceRoot: (root) =>
+            root === otherWorkspaceRoot
+              ? Effect.succeed(Option.some(otherProject))
+              : Effect.fail(
+                  new ProjectService.ProjectOperationError({
+                    operation: "normalize-workspace",
+                    workspaceRoot: root,
+                    cause: "missing",
+                  }),
+                ),
+          snapshot: Effect.succeed({
+            projects: [project, otherProject],
+          } as unknown as ProjectService.ProjectService["Service"]["snapshot"] extends Effect.Effect<
+            infer A,
+            infer _E
+          >
+            ? A
+            : never),
         } satisfies Partial<ProjectService.ProjectService["Service"]>),
+        Layer.mock(ThreadCheckoutService.ThreadCheckoutService)({ attach }),
         ServerSettings.layerTest({
           newWorktreesStartFromOrigin: options.newWorktreesStartFromOrigin ?? false,
         }),
@@ -351,6 +391,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
     deleteLocalBranch,
     localStatus,
     runForThread,
+    attach,
   };
 };
 
@@ -985,6 +1026,7 @@ describe("t3_worktree_status", () => {
         branch: null,
         projectWorkspaceRoot: workspaceRoot,
         defaultStartFromOrigin: true,
+        attachedCheckouts: [],
       });
     });
   });
@@ -1066,4 +1108,71 @@ describe("WorktreeMcpHandoffInput schema", () => {
       expect(Exit.isFailure(exit)).toBe(true);
     }),
   );
+});
+
+describe("t3_checkout_attach and t3_checkout_detach", () => {
+  const run = <A, E>(
+    harness: ReturnType<typeof makeHarness>,
+    f: (service: WorktreeMcpService.WorktreeMcpService["Service"]) => Effect.Effect<A, E>,
+  ) =>
+    Effect.gen(function* () {
+      return yield* f(yield* WorktreeMcpService.WorktreeMcpService);
+    }).pipe(Effect.provide(harness.layer));
+
+  it.effect("attaches a project named by title as its root", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const result = yield* run(harness, (service) =>
+        service.attachCheckout(harness.scope, { project: "other project" }),
+      );
+      expect(harness.attach).toHaveBeenCalledWith(
+        expect.objectContaining({ projectId: otherProjectId, workspace: { type: "root" } }),
+      );
+      expect(result.checkout).toEqual({
+        projectId: otherProjectId,
+        path: otherWorkspaceRoot,
+        branch: "main",
+      });
+      // Attaching never queues a message: the agent keeps working in its turn.
+      expect(harness.sendToThread).not.toHaveBeenCalled();
+    });
+  });
+
+  it.effect("rejects an unknown project", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        run(harness, (service) => service.attachCheckout(harness.scope, { project: "nope" })),
+      );
+      expectTypedFailure(exit, { _tag: "WorktreeMcpFailure", code: "project_not_found" });
+      expect(harness.attach).not.toHaveBeenCalled();
+    });
+  });
+
+  it.effect("detaches an attached project and reports a project that is not attached", () => {
+    const harness = makeHarness({
+      thread: {
+        attachedCheckouts: [
+          { id: "checkout:a", projectId: otherProjectId, worktreePath: "/wt/other", branch: "x" },
+        ],
+      },
+    });
+    return Effect.gen(function* () {
+      const result = yield* run(harness, (service) =>
+        service.detachCheckout(harness.scope, { project: otherWorkspaceRoot }),
+      );
+      expect(result.checkout.path).toBe("/wt/other");
+      expect(harness.dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "thread.checkout.detach", projectId: otherProjectId }),
+      );
+
+      const unattached = makeHarness();
+      const exit = yield* Effect.exit(
+        run(unattached, (service) =>
+          service.detachCheckout(unattached.scope, { project: otherProjectId }),
+        ),
+      );
+      expectTypedFailure(exit, { _tag: "WorktreeMcpFailure", code: "invalid_request" });
+    });
+  });
 });

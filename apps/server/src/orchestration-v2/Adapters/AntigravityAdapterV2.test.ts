@@ -188,6 +188,11 @@ describe("AntigravityAdapterV2 client file system", () => {
       });
       const outsideFile = path.join(outside, "secret.txt");
       yield* fileSystem.writeFileString(outsideFile, "secret");
+      const attachedCheckout = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-antigravity-attached-",
+      });
+      const attachedFile = path.join(attachedCheckout, "other.ts");
+      yield* fileSystem.writeFileString(attachedFile, "attached");
       const attachment = path.join(host.paths.attachmentsDir, "pasted.txt");
       yield* fileSystem.writeFileString(attachment, "pasted");
 
@@ -196,6 +201,7 @@ describe("AntigravityAdapterV2 client file system", () => {
         runtimeMode: "full-access",
         interactionMode: "default",
         cwd: workspace,
+        additionalDirectories: [attachedCheckout],
       });
       const modelSelection = { instanceId, model: "gemini-test-low" } as const;
       const session = yield* adapter.openSession({
@@ -221,6 +227,11 @@ describe("AntigravityAdapterV2 client file system", () => {
         context("fs/read_text_file"),
       );
       assert.equal(pasted.content, "pasted");
+      const fromAttached = yield* readTextFile(
+        { sessionId: "mock-session-1", path: attachedFile },
+        context("fs/read_text_file"),
+      );
+      assert.equal(fromAttached.content, "attached");
 
       const outsideRead = yield* readTextFile(
         { sessionId: "mock-session-1", path: outsideFile },

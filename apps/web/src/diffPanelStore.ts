@@ -1,5 +1,5 @@
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
-import type { RunId, ScopedThreadRef } from "@t3tools/contracts";
+import type { ProjectId, RunId, ScopedThreadRef } from "@t3tools/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
@@ -16,6 +16,9 @@ const DEFAULT_SELECTION: DiffPanelSelection = { kind: "branch", baseRef: null };
 interface DiffPanelStoreState {
   byThreadKey: Record<string, DiffPanelSelection>;
   branchBaseRefByThreadKey: Record<string, string | null>;
+  /** The attached checkout's project the panel diffs; absent means the thread's workspace. */
+  projectIdByThreadKey: Record<string, ProjectId>;
+  selectProject: (ref: ScopedThreadRef, projectId: ProjectId | null) => void;
   selectGitScope: (ref: ScopedThreadRef, scope: "branch" | "unstaged") => void;
   selectBranchBaseRef: (ref: ScopedThreadRef, baseRef: string | null) => void;
   selectTurn: (ref: ScopedThreadRef, turnId: RunId, filePath?: string) => void;
@@ -33,6 +36,22 @@ export const useDiffPanelStore = create<DiffPanelStoreState>()(
     (set) => ({
       byThreadKey: {},
       branchBaseRefByThreadKey: {},
+      projectIdByThreadKey: {},
+      // Another repository: its branches and turns differ, so the selection resets.
+      selectProject: (ref, projectId) =>
+        set((state) => {
+          const threadKey = scopedThreadKey(ref);
+          if ((state.projectIdByThreadKey[threadKey] ?? null) === projectId) return state;
+          const { [threadKey]: _project, ...projects } = state.projectIdByThreadKey;
+          const { [threadKey]: _selection, ...selections } = state.byThreadKey;
+          const { [threadKey]: _baseRef, ...baseRefs } = state.branchBaseRefByThreadKey;
+          return {
+            projectIdByThreadKey:
+              projectId === null ? projects : { ...projects, [threadKey]: projectId },
+            byThreadKey: selections,
+            branchBaseRefByThreadKey: baseRefs,
+          };
+        }),
       selectGitScope: (ref, scope) =>
         set((state) => {
           const threadKey = scopedThreadKey(ref);
@@ -108,13 +127,19 @@ export const useDiffPanelStore = create<DiffPanelStoreState>()(
       removeThread: (ref) =>
         set((state) => {
           const threadKey = scopedThreadKey(ref);
-          if (!(threadKey in state.byThreadKey) && !(threadKey in state.branchBaseRefByThreadKey)) {
+          if (
+            !(threadKey in state.byThreadKey) &&
+            !(threadKey in state.branchBaseRefByThreadKey) &&
+            !(threadKey in state.projectIdByThreadKey)
+          ) {
             return state;
           }
           const { [threadKey]: _removed, ...byThreadKey } = state.byThreadKey;
           const { [threadKey]: _removedBaseRef, ...branchBaseRefByThreadKey } =
             state.branchBaseRefByThreadKey;
-          return { byThreadKey, branchBaseRefByThreadKey };
+          const { [threadKey]: _removedProjectId, ...projectIdByThreadKey } =
+            state.projectIdByThreadKey;
+          return { byThreadKey, branchBaseRefByThreadKey, projectIdByThreadKey };
         }),
     }),
     {
@@ -126,6 +151,7 @@ export const useDiffPanelStore = create<DiffPanelStoreState>()(
       partialize: (state) => ({
         byThreadKey: state.byThreadKey,
         branchBaseRefByThreadKey: state.branchBaseRefByThreadKey,
+        projectIdByThreadKey: state.projectIdByThreadKey,
       }),
     },
   ),
@@ -137,4 +163,12 @@ export function selectThreadDiffPanelSelection(
 ): DiffPanelSelection {
   if (!ref) return DEFAULT_SELECTION;
   return byThreadKey[scopedThreadKey(ref)] ?? DEFAULT_SELECTION;
+}
+
+export function selectThreadDiffPanelProjectId(
+  projectIdByThreadKey: Record<string, ProjectId>,
+  ref: ScopedThreadRef | null | undefined,
+): ProjectId | null {
+  if (!ref) return null;
+  return projectIdByThreadKey[scopedThreadKey(ref)] ?? null;
 }

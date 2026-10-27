@@ -29,6 +29,16 @@ describe("buildRuntimeInstructions", () => {
     ).toContain("through the Codex harness, as my-model.");
   });
 
+  it("lists attached checkouts only when there are any", () => {
+    expect(buildRuntimeInstructions({ harness: "Codex" })).not.toContain("attached_checkouts");
+    expect(buildRuntimeInstructions({ harness: "Codex", additionalDirectories: [] })).not.toContain(
+      "attached_checkouts",
+    );
+    expect(
+      buildRuntimeInstructions({ harness: "Codex", additionalDirectories: ["/a", "/b"] }),
+    ).toContain("like the workspace:\n- /a\n- /b\n</attached_checkouts>");
+  });
+
   it.each([undefined, "", "auto", "default"])("omits unresolved model %s", (model) => {
     const instructions = buildRuntimeInstructions({ harness: "Cursor", model });
     expect(instructions).toContain("through the Cursor harness.");

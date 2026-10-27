@@ -15,6 +15,7 @@ import type {
   ProviderInstanceId,
   RunId,
   ThreadId,
+  ThreadAttachedCheckout,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
@@ -99,6 +100,8 @@ export interface EnvironmentThreadShell {
   readonly interactionMode: OrchestrationV2ThreadShell["interactionMode"];
   readonly branch: string | null;
   readonly worktreePath: string | null;
+  /** Checkouts of other projects the thread's agent also works in. */
+  readonly attachedCheckouts: ReadonlyArray<ThreadAttachedCheckout>;
   readonly lineage: OrchestrationV2ThreadShell["lineage"];
   readonly forkedFrom: OrchestrationV2ThreadShell["forkedFrom"];
   readonly activeProviderThreadId: OrchestrationV2ThreadShell["activeProviderThreadId"];
@@ -207,6 +210,9 @@ export function scopeProject(
   return { ...project, environmentId };
 }
 
+// Shared so shells without attachments keep a stable reference.
+const NO_ATTACHED_CHECKOUTS: ReadonlyArray<ThreadAttachedCheckout> = [];
+
 export function presentThreadShell(
   environmentId: EnvironmentId,
   thread: OrchestrationV2ThreadShell,
@@ -242,6 +248,7 @@ export function presentThreadShell(
     interactionMode: thread.interactionMode,
     branch: thread.branch,
     worktreePath: thread.worktreePath,
+    attachedCheckouts: thread.attachedCheckouts ?? NO_ATTACHED_CHECKOUTS,
     pullRequests: threadPullRequestsOf(thread),
     linkedPullRequest: thread.linkedPullRequest ?? null,
     branchPullRequest: thread.branchPullRequest ?? null,

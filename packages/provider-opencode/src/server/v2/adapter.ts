@@ -428,7 +428,7 @@ type TurnTerminal =
 type Rule = Permission.Rule;
 type RulesPolicy = Pick<
   ProviderAdapter.ProviderAdapterV2RuntimePolicy,
-  "runtimeMode" | "interactionMode"
+  "runtimeMode" | "interactionMode" | "additionalDirectories"
 >;
 type NativeForm = EventOf<"form.created">["data"]["form"];
 
@@ -508,6 +508,12 @@ const sessionRules = (
         rule("shell", "ask"),
         rule("edit", policy.runtimeMode === "auto-accept-edits" ? "allow" : "ask"),
         rule("external_directory", "ask"),
+        // Attached checkouts are reached like the workspace itself.
+        ...(policy.additionalDirectories ?? []).map((directory): Rule => ({
+          action: "external_directory",
+          resource: `${directory.replace(/\/$/, "")}/*`,
+          effect: "allow",
+        })),
       ]),
   ...grants,
   // Plan mode writes only its plan, which `paths` allows again. Shell and read
@@ -3413,7 +3419,11 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         if (added) state.mcp = wanted;
       }
       const instructions = [
-        buildRuntimeInstructions({ harness: "OpenCode", model: turnInput.modelSelection.model }),
+        buildRuntimeInstructions({
+          harness: "OpenCode",
+          model: turnInput.modelSelection.model,
+          additionalDirectories: turnInput.runtimePolicy.additionalDirectories,
+        }),
         t3OrchestrationSystemPrompt(state.mcp !== undefined),
       ]
         .filter((part) => part !== undefined && part.length > 0)

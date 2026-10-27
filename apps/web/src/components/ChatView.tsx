@@ -258,6 +258,13 @@ import {
   type RightPanelSurface,
   useRightPanelStore,
 } from "../rightPanelStore";
+import { useThreadCheckoutRoots } from "../threadCheckouts";
+import { CheckoutRootPicker } from "./CheckoutRootPicker";
+import {
+  isAbsolutePath,
+  resolveWorkspaceFilePath,
+  workspaceRelativeFilePath,
+} from "@t3tools/shared/path";
 import {
   isPreviewSupportedInRuntime,
   setActivePreviewTab,
@@ -288,6 +295,7 @@ import { PullRequestDetailGhost } from "./pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavailableState";
 import { RightPanelTabs } from "./RightPanelTabs";
 import { LinkPullRequestDialogHost } from "./pullRequest/LinkPullRequestDialog";
+import { AttachCheckoutDialogHost } from "./chat/AttachCheckoutDialog";
 import { ThreadPullRequestsPanel } from "./pullRequest/ThreadPullRequestsPanel";
 import { useDeviceState } from "~/state/device";
 import { DeviceSetup } from "./device/DeviceSetup";
@@ -4230,6 +4238,10 @@ export default function ChatView(props: ChatViewProps) {
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
+  const checkoutRoots = useThreadCheckoutRoots(
+    activeThread?.environmentId ?? null,
+    activeThreadShell?.attachedCheckouts,
+  );
   useLayoutEffect(() => {
     if (
       threadDetailLoading ||
@@ -11078,6 +11090,25 @@ export default function ChatView(props: ChatViewProps) {
     return <NoActiveThreadState />;
   }
 
+  // Files of an attached checkout keep absolute paths in their surfaces, so each
+  // resolves against the checkout containing it and stays editable there.
+  const filesCheckout =
+    renderedRightPanelSurface?.kind === "files"
+      ? checkoutRoots.find(
+          (root) =>
+            root.cwd !== null && root.checkout.projectId === renderedRightPanelSurface.projectId,
+        )
+      : renderedRightPanelSurface?.kind === "file" &&
+          !renderedRightPanelSurface.attachment &&
+          isAbsolutePath(renderedRightPanelSurface.relativePath)
+        ? checkoutRoots.find(
+            (root) =>
+              root.cwd !== null &&
+              workspaceRelativeFilePath(renderedRightPanelSurface.relativePath, root.cwd) !== null,
+          )
+        : undefined;
+  const filesCheckoutCwd = filesCheckout?.cwd ?? null;
+  const filesCwd = filesCheckoutCwd ?? activeWorkspaceRoot;
   const rightPanelContent = activeThreadRef ? (
     renderedRightPanelSurface?.kind === "preview" ? (
       <Suspense fallback={null}>
@@ -11191,25 +11222,30 @@ export default function ChatView(props: ChatViewProps) {
       </Suspense>
     ) : (renderedRightPanelSurface?.kind === "files" ||
         renderedRightPanelSurface?.kind === "file") &&
-      ((activeProject && activeWorkspaceRoot) ||
+      ((activeProject && filesCwd) ||
         (renderedRightPanelSurface.kind === "file" && renderedRightPanelSurface.attachment)) ? (
       <Suspense fallback={null}>
         <FilePreviewPanel
           key={`${activeThread.environmentId}:${
             renderedRightPanelSurface.kind === "file" && renderedRightPanelSurface.attachment
               ? `attachment:${renderedRightPanelSurface.attachment.id}`
-              : activeWorkspaceRoot
+              : filesCwd
           }`}
           environmentId={activeThread.environmentId}
-          cwd={activeWorkspaceRoot ?? ""}
-          projectName={activeProject?.title ?? ""}
+          cwd={filesCwd ?? ""}
+          projectName={filesCheckout?.projectTitle ?? activeProject?.title ?? ""}
           threadRef={activeThreadRef}
           composerDraftTarget={composerDraftTarget}
           keybindings={keybindings}
           availableEditors={availableEditors}
           relativePath={
             renderedRightPanelSurface.kind === "file"
-              ? renderedRightPanelSurface.relativePath
+              ? filesCheckoutCwd
+                ? (workspaceRelativeFilePath(
+                    renderedRightPanelSurface.relativePath,
+                    filesCheckoutCwd,
+                  ) ?? renderedRightPanelSurface.relativePath)
+                : renderedRightPanelSurface.relativePath
               : null
           }
           {...(renderedRightPanelSurface.kind === "file" && renderedRightPanelSurface.attachment
@@ -11225,13 +11261,39 @@ export default function ChatView(props: ChatViewProps) {
               ? renderedRightPanelSurface.revealRequestId
               : 0
           }
-          onOpenFile={openFileSurface}
-          onPendingChange={handleFilePendingChange}
+          onOpenFile={
+            filesCheckoutCwd
+              ? (relativePath) =>
+                  openFileSurface(resolveWorkspaceFilePath(relativePath, filesCheckoutCwd))
+              : openFileSurface
+          }
+          onPendingChange={
+            filesCheckoutCwd
+              ? (relativePath, pending) =>
+                  handleFilePendingChange(
+                    resolveWorkspaceFilePath(relativePath, filesCheckoutCwd),
+                    pending,
+                  )
+              : handleFilePendingChange
+          }
           selectedFilePending={
             renderedRightPanelSurface.kind === "file" &&
             pendingFileSurfaceIds.has(renderedRightPanelSurface.id)
           }
           workspaceMutationId={workspaceMutationId}
+          absoluteMentions={filesCheckoutCwd !== null}
+          rootControl={
+            checkoutRoots.length > 0 ? (
+              <CheckoutRootPicker
+                workspaceTitle={activeProject?.title ?? "Thread workspace"}
+                roots={checkoutRoots}
+                value={filesCheckout?.checkout.projectId ?? null}
+                onValueChange={(projectId) =>
+                  useRightPanelStore.getState().openFiles(activeThreadRef, projectId)
+                }
+              />
+            ) : undefined
+          }
         />
       </Suspense>
     ) : null
@@ -12175,6 +12237,7 @@ export default function ChatView(props: ChatViewProps) {
         </AlertDialogPopup>
       </AlertDialog>
       <LinkPullRequestDialogHost />
+      <AttachCheckoutDialogHost />
       {expandedImage && (
         <ExpandedImageDialog
           key={expandedImageKey(expandedImage)}

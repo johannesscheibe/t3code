@@ -432,6 +432,30 @@ describe("CodexAdapterV2 runtime policy", () => {
     }),
   );
 
+  it.effect("makes attached checkouts writable in workspace-write turns", () =>
+    Effect.gen(function* () {
+      const params = yield* CodexAdapterV2.buildCodexTurnStartParams({
+        nativeThreadId: "native-checkouts",
+        codexInput: [{ type: "text", text: "test" }],
+        runtimePolicy: {
+          runtimeMode: "auto",
+          interactionMode: "default",
+          cwd: "/workspace",
+          additionalDirectories: ["/other-project"],
+        },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.4",
+        },
+      });
+
+      assert.deepEqual(params.sandboxPolicy, {
+        type: "workspaceWrite",
+        writableRoots: ["/other-project"],
+      });
+    }),
+  );
+
   it.effect("preserves explicit Codex turn policy overrides", () =>
     Effect.gen(function* () {
       const params = yield* CodexAdapterV2.buildCodexTurnStartParams({

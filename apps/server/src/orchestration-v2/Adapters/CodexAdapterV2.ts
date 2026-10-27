@@ -721,10 +721,22 @@ export function buildCodexTurnStartParams(input: {
       input.runtimePolicy.approvalPolicy === undefined
         ? runtimeModeDefaults.approvalPolicy
         : yield* decodeTurnApprovalPolicy(input.runtimePolicy.approvalPolicy);
-    const sandboxPolicy =
+    const requestedSandboxPolicy =
       input.runtimePolicy.sandboxPolicy === undefined
         ? runtimeModeDefaults.sandboxPolicy
         : yield* decodeTurnSandboxPolicy(input.runtimePolicy.sandboxPolicy);
+    // Attached checkouts are writable wherever the workspace is.
+    const sandboxPolicy =
+      requestedSandboxPolicy?.type === "workspaceWrite" &&
+      input.runtimePolicy.additionalDirectories !== undefined
+        ? {
+            ...requestedSandboxPolicy,
+            writableRoots: [
+              ...(requestedSandboxPolicy.writableRoots ?? []),
+              ...input.runtimePolicy.additionalDirectories,
+            ],
+          }
+        : requestedSandboxPolicy;
     const selectedEffort = getModelSelectionStringOptionValue(
       input.modelSelection,
       "reasoningEffort",
@@ -751,7 +763,11 @@ export function buildCodexTurnStartParams(input: {
     const t3Context =
       input.hasT3Mcp === true
         ? buildCodexAdditionalContext(
-            { model: input.modelSelection.model, reasoningEffort: effort ?? "medium" },
+            {
+              model: input.modelSelection.model,
+              reasoningEffort: effort ?? "medium",
+              additionalDirectories: input.runtimePolicy.additionalDirectories,
+            },
             {
               browser: input.browserToolsAvailable ?? true,
               device: input.deviceToolsAvailable ?? false,

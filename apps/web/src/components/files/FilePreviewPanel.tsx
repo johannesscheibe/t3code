@@ -40,7 +40,7 @@ import { mediaFileReference } from "@t3tools/client-runtime/media-reference";
 import { FolderTree, Globe2, WrapTextIcon } from "lucide-react";
 import { Code2, Eye, Table2 } from "lucide";
 import * as Schema from "effect/Schema";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { isBrowserPreviewFile, openFileInPreview } from "~/browser/openFileInPreview";
 import { useAssetUrlRefresh, useAssetUrlState } from "~/assets/assetUrls";
@@ -132,6 +132,10 @@ interface FilePreviewPanelProps {
   onPendingChange: (relativePath: string, pending: boolean) => void;
   selectedFilePending: boolean;
   workspaceMutationId: string | null;
+  /** Passed to the explorer: mention files by absolute path. */
+  absoluteMentions?: boolean;
+  /** Passed to the explorer's header, e.g. a picker for which checkout to browse. */
+  rootControl?: ReactNode;
 }
 
 const FILE_EXPLORER_STORAGE_KEY = "t3code.fileExplorerOpen";
@@ -667,6 +671,8 @@ interface EditableFileSurfaceProps {
   wordWrap: boolean;
   onPostRender: FilePostRender;
   onPendingChange: (relativePath: string, pending: boolean) => void;
+  /** Comments name the file by absolute path, e.g. in an attached checkout. */
+  absoluteCommentPaths?: boolean | undefined;
 }
 
 interface FileSelectionOverride {
@@ -685,9 +691,14 @@ function EditableFileSurface({
   wordWrap,
   onPostRender,
   onPendingChange,
+  absoluteCommentPaths,
 }: EditableFileSurfaceProps) {
   const addReviewComment = useComposerDraftStore((store) => store.addReviewComment);
   const removeReviewComment = useComposerDraftStore((store) => store.removeReviewComment);
+  // Comments name a file of an attached checkout by absolute path.
+  const commentPath = absoluteCommentPaths
+    ? resolvePathLinkTarget(relativePath, cwd)
+    : relativePath;
   const [lineAnnotations, setLineAnnotations] = useState<FileCommentLineAnnotation[]>([]);
   const [selectionOverride, setSelectionOverride] = useState<FileSelectionOverride | null>(null);
   const selectedRange =
@@ -754,7 +765,7 @@ function EditableFileSurface({
             composerDraftTarget,
             buildFileReviewComment({
               id: entry.id,
-              filePath: relativePath,
+              filePath: commentPath,
               startLine: entry.startLine,
               endLine: entry.endLine,
               text: entry.text,
@@ -764,7 +775,15 @@ function EditableFileSurface({
         }
       }
     },
-    [addReviewComment, composerDraftTarget, cwd, environmentId, relativePath, saveCoordinator],
+    [
+      addReviewComment,
+      commentPath,
+      composerDraftTarget,
+      cwd,
+      environmentId,
+      relativePath,
+      saveCoordinator,
+    ],
   );
 
   const removeAnnotationEntry = useCallback(
@@ -792,7 +811,7 @@ function EditableFileSurface({
           composerDraftTarget,
           buildFileReviewComment({
             id: entry.id,
-            filePath: relativePath,
+            filePath: commentPath,
             startLine: entry.startLine,
             endLine: entry.endLine,
             text,
@@ -815,10 +834,10 @@ function EditableFileSurface({
     },
     [
       addReviewComment,
+      commentPath,
       composerDraftTarget,
       contents,
       lineAnnotations,
-      relativePath,
       setSelectedRange,
     ],
   );
@@ -1041,6 +1060,8 @@ export default function FilePreviewPanel({
   onPendingChange,
   selectedFilePending,
   workspaceMutationId,
+  absoluteMentions,
+  rootControl,
 }: FilePreviewPanelProps) {
   const relativePath =
     attachment === undefined ? resolveFilePreviewPath(requestedPath, cwd) : requestedPath;
@@ -1472,6 +1493,7 @@ export default function FilePreviewPanel({
                   wordWrap={wordWrap}
                   onPostRender={onFilePostRender}
                   onPendingChange={onPendingChange}
+                  absoluteCommentPaths={absoluteMentions}
                 />
               </DiffWorkerPoolProvider>
             )
@@ -1495,6 +1517,8 @@ export default function FilePreviewPanel({
               selectedPathRevealId={revealRequestId}
               onOpenFile={onOpenFile}
               workspaceMutationId={workspaceMutationId}
+              {...(absoluteMentions ? { absoluteMentions } : {})}
+              rootControl={rootControl}
               {...(previewPath && !isMedia && !isPdf
                 ? { onRefreshSelectedFile: file.refresh }
                 : {})}

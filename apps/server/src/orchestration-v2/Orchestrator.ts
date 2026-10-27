@@ -80,9 +80,12 @@ import * as Stream from "effect/Stream";
 
 import * as ProjectStore from "./ProjectStore.ts";
 import {
+  ATTACHED_CHECKOUT_RESTORE_MESSAGE,
+  areAttachedCheckoutsRestorable,
   isCheckpointRestoreIsolated,
   SHARED_WORKSPACE_RESTORE_MESSAGE,
 } from "./CheckpointRestoreSafety.ts";
+import { resolveAttachedCheckoutRoots } from "./AttachedCheckouts.ts";
 import { CheckpointServiceV2 } from "./CheckpointService.ts";
 import { CommandPolicyV2, resolveMessageDispatchIntent } from "./CommandPolicy.ts";
 import { CommandReceiptStoreV2 } from "./CommandReceiptStore.ts";
@@ -450,6 +453,8 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.visit":
     case "thread.mark-unread":
     case "thread.metadata.update":
+    case "thread.checkout.attach":
+    case "thread.checkout.detach":
     case "thread.pull-request.link":
     case "thread.pull-request.unlink":
     case "thread.pull-request-link.sync":
@@ -2422,6 +2427,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           | "thread.active.reorder"
           | "thread.mark-unread"
           | "thread.metadata.update"
+          | "thread.checkout.attach"
+          | "thread.checkout.detach"
           | "thread.pull-request.link"
           | "thread.pull-request.unlink"
           | "thread.pull-request-link.sync"
@@ -2519,6 +2526,38 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         commandType: command.type,
         cause: `Thread ${command.threadId} worktree changed before the metadata update could be applied.`,
       });
+    }
+    if (command.type === "thread.checkout.attach" || command.type === "thread.checkout.detach") {
+      if (isProviderNativeSubagentThread(thread)) {
+        return yield* new OrchestratorSubagentThreadReadOnlyError({
+          commandId: command.commandId,
+          threadId: command.threadId,
+        });
+      }
+      const projectId =
+        command.type === "thread.checkout.attach" ? command.checkout.projectId : command.projectId;
+      const attached = (thread.attachedCheckouts ?? []).some(
+        (checkout) => checkout.projectId === projectId,
+      );
+      const cause =
+        command.type === "thread.checkout.detach"
+          ? attached
+            ? null
+            : `Project ${projectId} is not attached to thread ${command.threadId}.`
+          : thread.archivedAt !== null
+            ? `Thread ${command.threadId} is archived.`
+            : projectId === thread.projectId
+              ? `Project ${projectId} is the thread's own project.`
+              : attached
+                ? `Project ${projectId} is already attached to thread ${command.threadId}.`
+                : null;
+      if (cause !== null) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause,
+        });
+      }
     }
     if (command.type === "thread.metadata.update" && command.expectedEmpty === true) {
       const records = yield* projectionStore
@@ -3026,6 +3065,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             updatedAt: now,
           };
         }
+        case "thread.checkout.attach":
+          return {
+            ...thread,
+            attachedCheckouts: [...(thread.attachedCheckouts ?? []), command.checkout],
+            updatedAt: now,
+          };
+        case "thread.checkout.detach":
+          return {
+            ...thread,
+            attachedCheckouts: (thread.attachedCheckouts ?? []).filter(
+              (checkout) => checkout.projectId !== command.projectId,
+            ),
+            updatedAt: now,
+          };
         case "thread.pull-request.link":
         case "thread.pull-request.unlink":
         case "thread.pull-request-link.sync": {
@@ -3258,6 +3311,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         case "thread.mark-unread":
           return "thread.marked-unread" as const;
         case "thread.metadata.update":
+        case "thread.checkout.attach":
+        case "thread.checkout.detach":
         case "thread.title.regeneration.complete":
           return "thread.metadata-updated" as const;
         case "thread.pull-request.link":
@@ -9628,6 +9683,42 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             commandType: command.type,
             cause: SHARED_WORKSPACE_RESTORE_MESSAGE,
           });
+        const checkoutsRestorable = yield* resolveAttachedCheckoutRoots(
+          projection.thread,
+          projects,
+        ).pipe(
+          Effect.flatMap((checkouts) =>
+            checkouts.length === 0
+              ? Effect.succeed([])
+              : checkpointService.checkoutRestoreTargets({
+                  threadId: command.threadId,
+                  checkouts,
+                  ordinalWithinScope: targetCheckpoint.ordinalWithinScope,
+                }),
+          ),
+          Effect.flatMap((targets) =>
+            areAttachedCheckoutsRestorable(projection.thread, targets, {
+              projects,
+              path,
+              fileSystem,
+              projections: projectionStore,
+            }),
+          ),
+          Effect.mapError(
+            (cause) =>
+              new OrchestratorDispatchError({
+                commandId: command.commandId,
+                commandType: command.type,
+                cause,
+              }),
+          ),
+        );
+        if (!checkoutsRestorable)
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: ATTACHED_CHECKOUT_RESTORE_MESSAGE,
+          });
       }
 
       const targetOrdinal = targetCheckpoint.appRunOrdinal ?? 0;
@@ -10692,6 +10783,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.active.reorder":
       case "thread.mark-unread":
       case "thread.metadata.update":
+      case "thread.checkout.attach":
+      case "thread.checkout.detach":
       case "thread.pull-request.link":
       case "thread.pull-request.unlink":
       case "thread.pull-request-link.sync":

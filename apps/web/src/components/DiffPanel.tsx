@@ -30,7 +30,12 @@ import { type DraftId } from "../composerDraftStore";
 import { openDiffFilePrimaryAction } from "../diffFileActions";
 import { useCheckpointDiff } from "~/lib/checkpointDiffState";
 import { cn } from "~/lib/utils";
-import { selectThreadDiffPanelSelection, useDiffPanelStore } from "../diffPanelStore";
+import {
+  selectThreadDiffPanelProjectId,
+  selectThreadDiffPanelSelection,
+  useDiffPanelStore,
+} from "../diffPanelStore";
+import { useThreadCheckoutRoots } from "../threadCheckouts";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useTheme } from "../hooks/useTheme";
 import {
@@ -50,6 +55,7 @@ import { useProject, useThreadProjection, useThreadShell } from "../state/entiti
 import { resolveThreadRouteRef } from "../threadRoutes";
 import { useClientSettings, useUpdateClientSettings } from "../hooks/useSettings";
 import { formatShortTimestamp } from "../timestampFormat";
+import { CheckoutRootPicker } from "./CheckoutRootPicker";
 import { DiffFilePathCopyButton } from "./DiffFilePathCopyButton";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { DiffStatLabel } from "./chat/DiffStatLabel";
@@ -235,10 +241,29 @@ export default function DiffPanel({
         }
       : null,
   );
-  const activeCwd = activeThread?.worktreePath ?? activeProject?.workspaceRoot;
-  const activeRepositoryRoot = activeThread?.worktreePath
-    ? undefined
-    : activeProject?.repositoryIdentity?.rootPath;
+  const checkoutRoots = useThreadCheckoutRoots(
+    activeThread?.environmentId ?? null,
+    activeThread?.attachedCheckouts,
+  );
+  const selectedProjectId = useDiffPanelStore((state) =>
+    selectThreadDiffPanelProjectId(state.projectIdByThreadKey, routeThreadRef),
+  );
+  // A checkout detached since it was selected falls back to the thread's workspace.
+  const selectedCheckout =
+    selectedProjectId === null
+      ? null
+      : (checkoutRoots.find(
+          (root) => root.checkout.projectId === selectedProjectId && root.cwd !== null,
+        ) ?? null);
+  const selectedCheckoutProjectId = selectedCheckout?.checkout.projectId ?? null;
+  const activeCwd = selectedCheckout
+    ? (selectedCheckout.cwd ?? undefined)
+    : (activeThread?.worktreePath ?? activeProject?.workspaceRoot);
+  const activeRepositoryRoot = selectedCheckout
+    ? selectedCheckout.repositoryRoot
+    : activeThread?.worktreePath
+      ? undefined
+      : activeProject?.repositoryIdentity?.rootPath;
   const serverConfig = useAtomValue(
     serverEnvironment.configValueAtom(activeThread?.environmentId ?? null),
   );
@@ -308,16 +333,21 @@ export default function DiffPanel({
       : selectedTurn?.runId === latestTurn?.runId
         ? "Latest turn"
         : `Turn ${selectedCheckpointTurnCount ?? "?"}`;
-  const reviewSectionId = selectedTurn ? `turn:${selectedTurn.runId}` : selectedGitScope;
+  // Comments in an attached checkout belong to it: its own section, named with its path.
+  const reviewSectionId = `${selectedCheckoutProjectId === null ? "" : `checkout:${selectedCheckout?.checkout.id}:`}${
+    selectedTurn ? `turn:${selectedTurn.runId}` : selectedGitScope
+  }`;
   const collapseScopeKey = routeThreadRef
-    ? `${routeThreadRef.environmentId}:${routeThreadRef.threadId}:${reviewSectionId}`
+    ? `${routeThreadRef.environmentId}:${routeThreadRef.threadId}:${selectedCheckoutProjectId ?? ""}:${reviewSectionId}`
     : null;
   const codeViewMountKey = `${collapseScopeKey ?? reviewSectionId}:${codeViewRevision}`;
-  const reviewSectionTitle = selectedTurn
-    ? `Turn ${selectedCheckpointTurnCount ?? "?"}`
-    : selectedGitScope === "unstaged"
-      ? "Uncommitted"
-      : "Changes";
+  const reviewSectionTitle = `${
+    selectedTurn
+      ? `Turn ${selectedCheckpointTurnCount ?? "?"}`
+      : selectedGitScope === "unstaged"
+        ? "Uncommitted"
+        : "Changes"
+  }${selectedCheckout?.cwd ? ` in ${selectedCheckout.cwd}` : ""}`;
   const selectedCheckpointRange = useMemo(
     () =>
       typeof selectedCheckpointTurnCount === "number"
@@ -335,7 +365,10 @@ export default function DiffPanel({
       fromTurnCount: selectedCheckpointRange?.fromTurnCount ?? null,
       toTurnCount: selectedCheckpointRange?.toTurnCount ?? null,
       ignoreWhitespace: diffIgnoreWhitespace,
-      cacheScope: selectedTurn ? `turn:${selectedTurn.runId}` : null,
+      cacheScope: selectedTurn
+        ? `turn:${selectedTurn.runId}:${selectedCheckoutProjectId ?? ""}`
+        : null,
+      projectId: selectedCheckoutProjectId,
     },
     { enabled: isGitRepo && selectedTurn !== undefined },
   );
@@ -503,7 +536,7 @@ export default function DiffPanel({
     enabled: canRefreshGitDiff,
     mutationId: workspaceMutationId,
     refresh: refreshBranchDiffPreview,
-    resourceKey: `diff:${activeThreadRefreshKey ?? ""}`,
+    resourceKey: `diff:${activeThreadRefreshKey ?? ""}:${selectedCheckoutProjectId ?? ""}`,
   });
 
   const isRefreshingDiff = branchDiffPreview.isPending || areFilePatchesPending;
@@ -636,6 +669,7 @@ export default function DiffPanel({
         filePath,
         activeCwd,
         repositoryRoot: activeRepositoryRoot,
+        absolutePath: selectedCheckout !== null,
         openInEditor: (targetPath) => {
           void (async () => {
             const result = await openInPreferredEditor(targetPath);
@@ -655,7 +689,7 @@ export default function DiffPanel({
         },
       });
     },
-    [activeCwd, activeRepositoryRoot, openInPreferredEditor, routeThreadRef],
+    [activeCwd, activeRepositoryRoot, openInPreferredEditor, routeThreadRef, selectedCheckout],
   );
   const collapseDefaultsRef = useRef({ collapseScopeKey, defaultCollapsedDiffFileKeys });
   useLayoutEffect(() => {
@@ -737,6 +771,18 @@ export default function DiffPanel({
   const headerRow = (
     <>
       <div className="flex min-w-0 flex-1 items-center gap-3 [-webkit-app-region:no-drag]">
+        {checkoutRoots.length > 0 ? (
+          <CheckoutRootPicker
+            workspaceTitle={activeProject?.title ?? "Thread workspace"}
+            roots={checkoutRoots}
+            value={selectedCheckoutProjectId}
+            onValueChange={(projectId) => {
+              if (routeThreadRef) {
+                useDiffPanelStore.getState().selectProject(routeThreadRef, projectId);
+              }
+            }}
+          />
+        ) : null}
         <DropdownMenu>
           <DropdownMenuTrigger
             render={<Button size="xs" variant="secondary" />}

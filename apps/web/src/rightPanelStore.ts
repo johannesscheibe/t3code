@@ -53,7 +53,12 @@ export type RightPanelSurface =
       splitDirection?: "horizontal" | "vertical";
     }
   | { id: "diff"; kind: "diff" }
-  | { id: "files"; kind: "files" }
+  | {
+      id: "files";
+      kind: "files";
+      /** The attached checkout's project this tab browses; absent means the thread's workspace. */
+      projectId?: string;
+    }
   | {
       id: `file:${string}` | `attachment:${string}`;
       kind: "file";
@@ -151,6 +156,8 @@ interface RightPanelStoreState {
   openDevice: (ref: ScopedThreadRef, target: DeviceTabTarget, automatic?: boolean) => void;
   renameDevice: (ref: ScopedThreadRef, surfaceId: string, title: string) => void;
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
+  /** Opens Files on the thread's workspace (null) or an attached checkout's project. */
+  openFiles: (ref: ScopedThreadRef, projectId: string | null) => void;
   openFile: (ref: ScopedThreadRef, relativePath: string, line?: number) => void;
   openAttachment: (ref: ScopedThreadRef, attachment: ChatFileAttachment) => void;
   openPullRequest: (
@@ -645,6 +652,21 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
               return upsertSurface(current, existing ?? browserSurface(null));
             }
             return upsertSurface(current, singletonSurface(kind));
+          }),
+        ),
+      openFiles: (ref, projectId) =>
+        set((state) =>
+          userAction(state, scopedThreadKey(ref), (current) => {
+            const surface: RightPanelSurface = projectId
+              ? { id: "files", kind: "files", projectId }
+              : { id: "files", kind: "files" };
+            return upsertSurface(
+              {
+                ...current,
+                surfaces: current.surfaces.map((entry) => (entry.id === "files" ? surface : entry)),
+              },
+              surface,
+            );
           }),
         ),
       openDevice: (ref, target, automatic = false) =>

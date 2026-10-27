@@ -38,6 +38,19 @@ describe("createFileTreeDragMentionController", () => {
     expect(transfer.getData(COMPOSER_MENTION_DRAG_TYPE)).toBe("[architecture](docs/architecture)");
   });
 
+  it("mentions the mapped path, so a checkout outside the workspace is mentioned absolutely", () => {
+    const controller = createFileTreeDragMentionController({
+      deselect: () => {},
+      mentionPath: (path) => `/repos/other/${path}`,
+    });
+    const transfer = makeTransfer();
+    controller.handleDragStart({
+      dataTransfer: transfer,
+      composedPath: () => [rowNode("src/")],
+    });
+    expect(transfer.getData(COMPOSER_MENTION_DRAG_TYPE)).toBe("[src](/repos/other/src)");
+  });
+
   it("does not tag drags of selected text from the panel chrome", () => {
     // Only a drag that originates on a tree row is a mention; dragging a text
     // selection also carries text/plain, and tagging it would drop an invalid

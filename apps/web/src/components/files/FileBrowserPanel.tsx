@@ -6,8 +6,9 @@ import type {
 import type { EnvironmentId, ProjectEntry } from "@t3tools/contracts";
 import { FileTree, useFileTree, useFileTreeSearch, useFileTreeSelector } from "@pierre/trees/react";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
+import { resolveWorkspaceFilePath } from "@t3tools/shared/path";
 import { ChevronsDownUp, ChevronsUpDown } from "lucide";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "~/components/ui/button";
 import { InputGroup, InputGroupInput } from "~/components/ui/input-group";
@@ -40,6 +41,10 @@ interface FileBrowserPanelProps {
   onOpenFile: (relativePath: string) => void;
   onRefreshSelectedFile?: () => void;
   workspaceMutationId: string | null;
+  /** Mention files by absolute path, for a root outside the agent's workspace. */
+  absoluteMentions?: boolean;
+  /** Leading header control, e.g. a picker for which checkout to browse. */
+  rootControl?: ReactNode;
 }
 
 function treePath(entry: ProjectEntry): string {
@@ -104,6 +109,8 @@ export default function FileBrowserPanel({
   onOpenFile,
   onRefreshSelectedFile,
   workspaceMutationId,
+  absoluteMentions = false,
+  rootControl,
 }: FileBrowserPanelProps) {
   const { resolvedTheme } = useTheme();
   const composerRef = useComposerHandleContext();
@@ -172,7 +179,9 @@ export default function FileBrowserPanel({
       return;
     }
     const relativePath = item.path.replace(/\/$/, "");
-    const mention = serializeComposerFileLink(relativePath);
+    const mention = serializeComposerFileLink(
+      absoluteMentions ? resolveWorkspaceFilePath(relativePath, cwd) : relativePath,
+    );
     const pointer = contextMenuPointerRef.current;
     const pointerIsFresh = pointer !== null && performance.now() - pointer.at < 1000;
     const anchorRect = context.anchorElement.getBoundingClientRect();
@@ -244,12 +253,16 @@ export default function FileBrowserPanel({
   // children shows a spinner in its row instead of a banner that shifts the tree.
   const loadingDirectoriesRef = useRef(loadingDirectories);
   const treeModelRef = useRef<ReturnType<typeof useFileTree>["model"] | null>(null);
+  const mentionRoot = absoluteMentions ? cwd : null;
   const dragMention = useMemo(
     () =>
       createFileTreeDragMentionController({
         deselect: (path) => treeModelRef.current?.getItem(path)?.deselect(),
+        ...(mentionRoot === null
+          ? {}
+          : { mentionPath: (path: string) => resolveWorkspaceFilePath(path, mentionRoot) }),
       }),
-    [],
+    [mentionRoot, treeModelRef],
   );
   const { model } = useFileTree({
     composition: {
@@ -508,6 +521,7 @@ export default function FileBrowserPanel({
         className="flex h-10 min-h-10 shrink-0 items-center gap-1 border-b border-border/60 bg-background px-2 in-data-[preview-panel-mode=inline]:mb-1 in-data-[preview-panel-mode=inline]:h-9 in-data-[preview-panel-mode=inline]:min-h-9 in-data-[preview-panel-mode=inline]:border-b-transparent"
         data-surface-subheader
       >
+        {rootControl}
         <RefreshFilesButton isPending={isPending} onRefresh={handleRefresh} />
         <FileSearchField
           name="project-files-search"
