@@ -3,7 +3,6 @@ import {
   MessageId,
   ProjectId,
   type ThreadAttachedCheckout,
-  type WorktreeMcpAttachCheckoutInput,
   type WorktreeMcpCheckoutChangeResult,
   type WorktreeMcpDetachCheckoutInput,
   WorktreeMcpFailure,
@@ -22,7 +21,6 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
-import * as ThreadCheckoutService from "../orchestration-v2/ThreadCheckoutService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
@@ -40,10 +38,6 @@ export class WorktreeMcpService extends Context.Service<
     readonly status: (
       scope: McpInvocationScope,
     ) => Effect.Effect<WorktreeMcpStatusResult, WorktreeMcpFailure>;
-    readonly attachCheckout: (
-      scope: McpInvocationScope,
-      input: WorktreeMcpAttachCheckoutInput,
-    ) => Effect.Effect<WorktreeMcpCheckoutChangeResult, WorktreeMcpFailure>;
     readonly detachCheckout: (
       scope: McpInvocationScope,
       input: WorktreeMcpDetachCheckoutInput,
@@ -77,7 +71,6 @@ const make = Effect.gen(function* () {
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
   const setupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
-  const threadCheckouts = yield* ThreadCheckoutService.ThreadCheckoutService;
 
   // Serializes handoffs per thread: two concurrent calls could otherwise both
   // pass the worktreePath === null check and each create a worktree, leaving
@@ -560,28 +553,6 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const attachCheckout: WorktreeMcpService["Service"]["attachCheckout"] = Effect.fn(
-    "WorktreeMcpService.attachCheckout",
-  )(function* (callerScope, input) {
-    yield* requireCapability(callerScope);
-    const scope = yield* requireThreadScope(callerScope);
-    const project = yield* resolveProject(input.project);
-    const ids = yield* handoffIds(scope);
-    const checkout = yield* threadCheckouts
-      .attach({
-        commandId: CommandId.make(ids.commandId.replace("worktree-handoff", "checkout-attach")),
-        threadId: scope.thread.threadId,
-        projectId: project.id,
-        workspace: input.workspace ?? { type: "root" },
-        ...(input.runSetupScript === undefined ? {} : { runSetupScript: input.runSetupScript }),
-      })
-      .pipe(Effect.mapError((error) => failure("invalid_request", error.message)));
-    return {
-      checkout: yield* describeCheckout(checkout),
-      note: "Attached. Turn diffs cover it from now on. Your sandbox and permissions include it from your next turn; until then, access there may be limited.",
-    };
-  });
-
   const detachCheckout: WorktreeMcpService["Service"]["detachCheckout"] = Effect.fn(
     "WorktreeMcpService.detachCheckout",
   )(function* (callerScope, input) {
@@ -615,7 +586,7 @@ const make = Effect.gen(function* () {
     };
   });
 
-  return WorktreeMcpService.of({ handoff, status, attachCheckout, detachCheckout });
+  return WorktreeMcpService.of({ handoff, status, detachCheckout });
 });
 
 export const layer: Layer.Layer<
@@ -629,5 +600,4 @@ export const layer: Layer.Layer<
   | GitWorkflowService.GitWorkflowService
   | ProjectSetupScriptRunner.ProjectSetupScriptRunner
   | VcsStatusBroadcaster.VcsStatusBroadcaster
-  | ThreadCheckoutService.ThreadCheckoutService
 > = Layer.effect(WorktreeMcpService, make);

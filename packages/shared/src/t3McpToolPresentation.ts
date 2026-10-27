@@ -41,7 +41,6 @@ export type T3McpToolSummaryAction =
   | "question-respond"
   | "secret-request"
   | "worktree-handoff"
-  | "checkout-attach"
   | "checkout-detach"
   | "worktree-list"
   | "worktree-status"
@@ -166,10 +165,6 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     "worktree-handoff",
   ),
   t3_worktree_status: tool(["Get", "Getting", "Got", "thread worktree status"], "worktree-status"),
-  t3_checkout_attach: tool(
-    ["Attach", "Attaching", "Attached", "another project's checkout"],
-    "checkout-attach",
-  ),
   t3_checkout_detach: tool(
     ["Detach", "Detaching", "Detached", "another project's checkout"],
     "checkout-detach",

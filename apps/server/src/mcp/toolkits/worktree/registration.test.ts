@@ -26,7 +26,6 @@ import * as VcsStatusBroadcaster from "../../../vcs/VcsStatusBroadcaster.ts";
 import * as ServerSecretStore from "../../../auth/ServerSecretStore.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as ThreadLaunchService from "../../../orchestration-v2/ThreadLaunchService.ts";
-import * as ThreadCheckoutService from "../../../orchestration-v2/ThreadCheckoutService.ts";
 import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
 import * as PreviewManager from "../../../preview/Manager.ts";
 import * as SourceControlRepositoryService from "../../../sourceControl/SourceControlRepositoryService.ts";
@@ -57,7 +56,6 @@ const layerStubServices = Layer.mergeAll(
   Layer.mock(ServerSecretStore.ServerSecretStore)({}),
   Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({}),
   Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
-  Layer.mock(ThreadCheckoutService.ThreadCheckoutService)({}),
   Layer.mock(ThreadSearch.ThreadSearch)({}),
 );
 
@@ -141,7 +139,8 @@ it.effect("production mcp layer lists worktree tools over http", () =>
       const toolNames = tools.map((tool) => tool.name);
       expect(toolNames).toContain("t3_worktree_handoff");
       expect(toolNames).toContain("t3_worktree_status");
-      expect(toolNames).toContain("t3_checkout_attach");
+      // Attaching widens the agent's sandbox, so only the user can do it.
+      expect(toolNames).not.toContain("t3_checkout_attach");
       expect(toolNames).toContain("t3_checkout_detach");
       // The worktree registration merges alongside the other toolkits rather
       // than replacing them.

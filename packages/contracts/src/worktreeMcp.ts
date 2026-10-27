@@ -1,7 +1,6 @@
 import * as Schema from "effect/Schema";
 
 import { ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
-import { OrchestrationV2CheckoutAttachWorkspace } from "./orchestrationV2.ts";
 
 /**
  * Input for the `t3_worktree_handoff` MCP tool.
@@ -99,23 +98,6 @@ export type WorktreeMcpHandoffResult = typeof WorktreeMcpHandoffResult.Type;
 const CheckoutProjectReference = TrimmedNonEmptyString.annotate({
   description: "The other project: its id, its title, or its workspace root path.",
 });
-
-/** Input for `t3_checkout_attach`. */
-export const WorktreeMcpAttachCheckoutInput = Schema.Struct({
-  project: CheckoutProjectReference,
-  workspace: Schema.optional(
-    OrchestrationV2CheckoutAttachWorkspace.annotate({
-      description:
-        "Which checkout to attach: `root` (the project's main checkout as it is), `existing_worktree` (a worktree path of that project), or `worktree` (a new worktree branching from baseRef). Defaults to root.",
-    }),
-  ),
-  runSetupScript: Schema.optional(
-    Schema.Boolean.annotate({
-      description: "Run the project's setup script in a new worktree. Defaults to true.",
-    }),
-  ),
-});
-export type WorktreeMcpAttachCheckoutInput = typeof WorktreeMcpAttachCheckoutInput.Type;
 
 /** Input for `t3_checkout_detach`. */
 export const WorktreeMcpDetachCheckoutInput = Schema.Struct({

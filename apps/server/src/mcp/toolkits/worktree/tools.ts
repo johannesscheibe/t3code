@@ -3,7 +3,6 @@ import {
   OrchestratorMcpFailure,
   VcsListRefsInput,
   VcsListRefsResult,
-  WorktreeMcpAttachCheckoutInput,
   WorktreeMcpCheckoutChangeResult,
   WorktreeMcpDetachCheckoutInput,
   WorktreeMcpHandoffInput,
@@ -85,21 +84,6 @@ const WorktreeListTool = Tool.make("t3_worktree_list", {
 })
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false);
-const CheckoutAttachTool = Tool.make("t3_checkout_attach", {
-  description:
-    "Needs an agent running inside a T3 thread. Attach a checkout of another T3 project to this thread so you can read and edit it alongside your workspace: the project's main checkout as it is, one of its existing worktrees, or a new worktree. One checkout per project; this thread's own project can't be attached. Keep working after the call: turn diffs and checkpoints cover the checkout from now on. Your sandbox and permissions include it from your next turn; until then, access there may be limited. t3_worktree_status lists attached checkouts.",
-  parameters: WorktreeMcpAttachCheckoutInput,
-  success: WorktreeMcpCheckoutChangeResult,
-  failure: WorktreeToolFailure,
-  failureMode: "return",
-  dependencies,
-})
-  .annotate(Tool.Title, "Attach another project's checkout")
-  .annotate(Tool.Readonly, false)
-  .annotate(Tool.Destructive, false)
-  .annotate(Tool.Idempotent, false)
-  .annotate(Tool.OpenWorld, true);
-
 const CheckoutDetachTool = Tool.make("t3_checkout_detach", {
   description:
     "Needs an agent running inside a T3 thread. Detach another project's checkout from this thread. Files stay on disk and a worktree is not removed. Turn diffs stop covering it at once, so edits you made there in this turn are not in this turn's diff; if they should be, detach in a later turn.",
@@ -119,6 +103,5 @@ export const WorktreeToolkit = Toolkit.make(
   WorktreeHandoffTool,
   WorktreeStatusTool,
   WorktreeListTool,
-  CheckoutAttachTool,
   CheckoutDetachTool,
 );
