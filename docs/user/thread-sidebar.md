@@ -184,8 +184,9 @@ A thread can also work in other projects' checkouts, for changes that span
 repositories. On web and desktop, open the thread details and use **+** in the
 **Checkouts** section. Pick a project, then use its checkout as it is or create
 a new worktree for this thread. Each checkout's menu opens its files or its
-changes. The agent can attach and detach checkouts itself with T3 Code's
-`t3_checkout_attach` and `t3_checkout_detach` tools.
+changes. Only you can attach a checkout, because it gives the agent access to
+another project. The agent can detach one with T3 Code's `t3_checkout_detach`
+tool.
 
 The Files and Diff panels switch between the thread's workspace and each
 checkout. Turn diffs cover a checkout from the moment it is attached. If you
